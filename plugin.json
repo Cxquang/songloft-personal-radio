@@ -1,0 +1,26 @@
+{
+  "name": "个人电台",
+  "name_en": "songloft-personal-radio",
+  "version": "0.1.0",
+  "description": "按多人画像自动演进的个性化电台推荐引擎：从曲库按兴趣打分、多样性筛选与探索选歌，支持手动画像、歌手标签库与按画像隔离的推荐池。语音口令与 miot 桥接将在 P2 接入。",
+  "author": "Cxquang",
+  "license": "MIT",
+  "entryPath": "personal-radio",
+  "main": "main.js",
+  "icon": "icon.svg",
+  "minHostVersion": "2.11.0",
+  "permissions": [
+    "storage",
+    "songs.read",
+    "playlists.read",
+    "playlists.write"
+  ],
+  "publicPaths": [
+    "/public"
+  ],
+  "staticHash": false,
+  "homepage": "https://github.com/Cxquang/songloft-personal-radio",
+  "download_url": "https://github.com/Cxquang/songloft-personal-radio/releases/latest/download/personal-radio-v0.1.0.jsplugin.zip",
+  "entryHash": "f56f0f25a92ea910eecdb1b8351e71aa9656879b424c5e135faaec171adad0ff",
+  "zipHash": "53029222c10cfb451b681e0331184d068ffccda173ea9e4d3af50b3c047095b3"
+}
