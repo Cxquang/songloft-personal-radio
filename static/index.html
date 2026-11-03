@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>个人电台</title>
   <base href="/">
-  <link rel="stylesheet" href="static/styles.css?v=0.1.0">
+  <link rel="stylesheet" href="static/styles.css?v=0.2.0">
 </head>
 <body>
   <div class="wrap">
     <header class="header">
-      <img class="icon" src="static/icon.svg?v=0.1.0" alt="">
+      <img class="icon" src="static/icon.svg?v=0.2.0" alt="">
       <div class="header-text">
         <h1>个人电台 <span class="ver" id="ver"></span></h1>
         <p class="sub">多人画像 · 行为自动演进 · 按兴趣选歌</p>
@@ -107,6 +107,60 @@
         </div>
       </section>
     </div>
+    <section class="card">
+      <div class="card-head">
+        <h2>AI 标签补全</h2>
+        <span class="tip small" id="ai-state">未启用</span>
+      </div>
+      <p class="tip small">曲库本身没有流派/风格/语种/年代字段。开启后由 AI 按固定标签表批量识别；人工可随时改单曲标签并锁定，AI 不会覆盖锁定项。</p>
+      <div class="form-grid">
+        <label>服务商
+          <select id="ai-provider"></select>
+        </label>
+        <label>API 地址（OpenAI 兼容）
+          <input id="ai-api-url" placeholder="https://api.deepseek.com/v1">
+        </label>
+        <label>API 密钥
+          <input id="ai-api-key" type="password" placeholder="留空表示不修改已保存的密钥" autocomplete="off">
+        </label>
+        <label>模型
+          <input id="ai-model" list="ai-model-list" placeholder="deepseek-chat">
+          <datalist id="ai-model-list"></datalist>
+        </label>
+        <label>超时（秒，5–120）
+          <input id="ai-timeout" type="number" min="5" max="120">
+        </label>
+        <label>每批歌曲数（5–50）
+          <input id="ai-batch" type="number" min="5" max="50">
+        </label>
+        <label>最低置信度（0–1）
+          <input id="ai-confidence" type="number" step="0.05" min="0" max="1">
+        </label>
+        <label>单次上限（0 = 不限制）
+          <input id="ai-limit" type="number" min="0" max="5000">
+        </label>
+      </div>
+      <label class="field-block">自定义请求头（JSON 对象，可选）
+        <textarea id="ai-headers" rows="3" placeholder="{}"></textarea>
+      </label>
+      <div class="check-grid">
+        <label class="check-line"><input type="checkbox" id="ai-enabled"> 启用 AI 标签补全</label>
+        <label class="check-line"><input type="checkbox" id="ai-json"> 要求 JSON 输出</label>
+        <label class="check-line"><input type="checkbox" id="ai-language"> 先本地识别语种</label>
+        <label class="check-line"><input type="checkbox" id="ai-force"> 重跑已标记歌曲（不覆盖锁定）</label>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="btn-save-ai">保存 AI 设置</button>
+        <button class="btn" id="btn-test-ai">检测连接与获取模型</button>
+        <button class="btn" id="btn-run-ai">开始补全</button>
+        <button class="btn danger" id="btn-stop-ai">停止</button>
+      </div>
+      <p class="tip small" id="ai-test-result"></p>
+      <div class="coverage-grid" id="ai-coverage"></div>
+      <div class="progress-bar"><span id="ai-progress-fill"></span></div>
+      <p class="tip small" id="ai-job-text">尚未运行补全任务</p>
+      <p class="tip small">检测连接会先调用 <code>/models</code>；若服务商不提供模型列表，会改用对话接口验证，仍可在「模型」里手工填写名称。</p>
+    </section>
 
     <section class="card">
       <div class="card-head">
@@ -126,13 +180,15 @@
         </div>
         <div>
           <h3>标签权重（-1 ~ 1）</h3>
+          <div class="chip-cloud" id="tag-cloud"></div>
+          <p class="tip small">点击标签默认 +0.6 并加入下方权重列表；再次点击移除。</p>
           <div class="weight-list" id="manual-tags"></div>
           <div class="row">
             <input id="tag-weight-name" placeholder="标签：华语 / 民谣 / 2000s">
             <input id="tag-weight-value" class="short" type="number" step="0.1" min="-1" max="1" value="0.5">
             <button class="btn" id="btn-add-tag">添加</button>
           </div>
-          <p class="tip small">标签来自「歌手标签库」，曲库本身没有流派/语种字段。</p>
+          <p class="tip small">歌曲级标签优先于歌手级标签；标签来自 AI 补全、单曲手动编辑或歌手标签库。</p>
         </div>
       </div>
       <div class="actions">
@@ -163,7 +219,22 @@
     </section>
   </div>
 
+  <div class="modal" id="tag-editor" hidden>
+    <div class="modal-card">
+      <div class="card-head">
+        <h2 id="tag-editor-title">歌曲标签</h2>
+        <button class="btn ghost small" id="btn-close-tag-editor">关闭</button>
+      </div>
+      <p class="tip small" id="tag-editor-sub"></p>
+      <div id="tag-editor-groups"></div>
+      <label class="check-line"><input type="checkbox" id="tag-editor-locked" checked> 锁定（AI 补全不覆盖）</label>
+      <div class="actions">
+        <button class="btn primary" id="btn-save-song-tags">保存标签</button>
+        <button class="btn danger" id="btn-delete-song-tags">清除标签</button>
+      </div>
+    </div>
+  </div>
   <div class="toast" id="toast"></div>
-  <script src="static/app.js?v=0.1.0"></script>
+  <script src="static/app.js?v=0.2.0"></script>
 </body>
 </html>

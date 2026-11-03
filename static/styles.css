@@ -514,3 +514,174 @@ select.compact { width: auto; padding-right: 26px; }
   .song-score { font-size: 12px; }
   .two-col { grid-template-columns: 1fr; }
 }
+/* ---------- AI 标签补全 ---------- */
+textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field-block { margin-top: 12px; }
+
+.check-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.check-grid label.check-line { flex: 0 0 auto; }
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.coverage-cell {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-soft);
+  padding: 8px 10px;
+}
+
+.coverage-name { font-size: 12px; color: var(--text-soft); }
+
+.coverage-value {
+  float: right;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-track {
+  clear: both;
+  margin-top: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.coverage-track span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+}
+
+.progress-bar {
+  margin-top: 12px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+#ai-progress-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  transition: width 0.25s ease;
+}
+
+/* ---------- 标签云 ---------- */
+.chip-cloud {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--card-soft);
+}
+
+.tag-group { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+
+.tag-group-name {
+  flex: 0 0 38px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  padding-top: 5px;
+}
+
+.chip-line { flex: 1; display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+
+.chip-select {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.chip-select:hover { border-color: var(--accent); color: var(--accent); }
+
+.chip-select.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tag-btn { flex: 0 0 auto; }
+
+/* ---------- 弹层 ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 13, 25, 0.55);
+}
+
+.modal[hidden] { display: none; }
+
+.modal-card {
+  width: min(760px, 100%);
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+}
+
+.modal-card .check-line { margin: 12px 0; }
+.modal-card .tag-group { margin-top: 10px; }
+
+@media (max-width: 560px) {
+  .tag-group { flex-direction: column; gap: 4px; }
+  .tag-group-name { flex: none; padding-top: 0; }
+}

@@ -1,5 +1,5 @@
 /**
- * personal-radio v0.1.0（P1）自测：mock 宿主曲库/歌单/存储，验证引擎与多画像
+ * personal-radio v0.2.0 自测：mock 宿主曲库/歌单/存储/AI 接口，验证引擎、多画像与标签补全
  * 覆盖：默认画像初始化、画像 CRUD 与别名唯一、候选仅远程、手动画像正/负权重、
  *       歌手标签命中、收藏开关、多样性与探索、推荐池补充/取出/回池、配置与状态、日志。
  */
@@ -66,6 +66,44 @@ globalThis.songloft = {
     removeSongs: async function () { }
   }
 };
+
+/* ---------- mock AI 接口（OpenAI 兼容） ---------- */
+globalThis.fetch = async function (url, init) {
+  const target = String(url || '');
+  const headers = (init && init.headers) || {};
+  if (!String(headers.Authorization || '').startsWith('Bearer sk-')) throw new Error('缺少 API Key');
+  if (/\/models$/.test(target)) {
+    return { ok: true, status: 200, json: async function () { return { data: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }] }; } };
+  }
+  if (target.indexOf('/chat/completions') >= 0) {
+    const payload = JSON.parse(init.body);
+    if (payload.messages.length === 1) {
+      return { ok: true, status: 200, json: async function () { return { choices: [{ message: { content: 'OK' } }] }; } };
+    }
+    const userText = payload.messages[payload.messages.length - 1].content;
+    const ids = [];
+    const re = /"id":"([^"]+)"/g;
+    let match;
+    while ((match = re.exec(userText))) ids.push(match[1]);
+    const items = ids.map(function (id) {
+      return { id: id, genre: '民谣', style: '流行', language: '华语', decade: '2000s', confidence: 0.9 };
+    });
+    return {
+      ok: true, status: 200,
+      json: async function () { return { choices: [{ message: { content: JSON.stringify({ items: items }) } }] }; }
+    };
+  }
+  return { ok: false, status: 404, text: async function () { return 'not found'; } };
+};
+
+async function waitAiJob() {
+  for (let i = 0; i < 80; i++) {
+    const status = await call('GET', '/api/ai/tag/status');
+    if (!status.data.job.running) return status.data.job;
+    await new Promise(function (resolve) { setTimeout(resolve, 50); });
+  }
+  throw new Error('AI 任务超时');
+}
 
 /* ---------- 加载插件 ---------- */
 const src = readFileSync(join(ROOT, 'src', 'main.js'), 'utf8');
@@ -228,10 +266,79 @@ ok(r.data.manual.artists['邓丽君'] === 1, '别名解析读到正确的手动�
 
 /* ---------- 状态与日志 ---------- */
 r = await call('GET', '/api/status');
-ok(r.status === 200 && r.data.version === '0.1.0', '/api/status：版本 0.1.0');
+ok(r.status === 200 && r.data.version === '0.2.0', '/api/status：版本 0.2.0');
 ok(r.data.profiles === 3, '/api/status：画像数量 3');
 ok(r.data.favorites.count === 2, '/api/status：收藏缓存 2 首');
 ok(r.data.singerTags === 2, '/api/status：歌手标签 2 个');
+/* ---------- 标签体系与 AI 补全 ---------- */
+r = await call('GET', '/api/tag-dictionary');
+ok(r.status === 200 && r.data.groups.length === 4, '标签字典：4 个分组');
+const tagGroups = r.data.groups;
+ok(tagGroups.filter(function (g) { return g.id === 'genre'; })[0].tags.indexOf('民谣') >= 0, '流派分组包含「民谣」');
+ok(tagGroups.filter(function (g) { return g.id === 'language'; })[0].tags.indexOf('粤语') >= 0, '语种分组包含「粤语」');
+ok(tagGroups.filter(function (g) { return g.id === 'style'; })[0].tags.indexOf('爵士') >= 0, '风格分组包含「爵士」');
+ok(tagGroups.filter(function (g) { return g.id === 'decade'; })[0].tags.indexOf('2000s') >= 0, '年代分组包含「2000s」');
+
+r = await call('POST', '/api/config', {
+  body: { config: { aiEnabled: true, aiApiUrl: 'https://api.deepseek.com/v1', aiApiKey: 'sk-test', aiModel: 'deepseek-chat', aiBatchSize: 12, aiMinConfidence: 0.7 } }
+});
+ok(r.status === 200 && r.data.config.aiEnabled === true, '保存 AI 配置：已启用');
+ok(r.data.config.aiApiUrl === 'https://api.deepseek.com/v1', '保存 AI 配置：API 地址保留');
+ok(r.data.config.aiBatchSize === 12, '保存 AI 配置：批量 12');
+
+r = await call('POST', '/api/config', { body: { config: { aiHeaders: { Authorization: 'x' } } } });
+ok(r.status === 400, '自定义请求头禁止覆盖 Authorization');
+
+r = await call('GET', '/api/ai/models');
+ok(r.status === 200 && r.data.count === 2, 'AI 模型列表：返回 2 个模型');
+
+r = await call('POST', '/api/ai/test');
+ok(r.status === 200 && r.data.ok === true && r.data.kind === 'models', 'AI 连通性检测通过');
+
+r = await call('POST', '/api/ai/tag/run', { body: { force: true } });
+ok(r.status === 200 && r.data.started === true, 'AI 补全任务已启动');
+let job = await waitAiJob();
+ok(job.running === false, 'AI 补全任务已结束');
+ok(job.stored === 12, 'AI 补全：12 首写入标签');
+
+r = await call('GET', '/api/tags/coverage');
+ok(r.status === 200 && r.data.coverage.total === 12, '标签覆盖率：候选 12 首');
+ok(r.data.coverage.genres === 12 && r.data.coverage.styles === 12, '标签覆盖率：流派/风格各 12 首');
+ok(r.data.coverage.languages === 12 && r.data.coverage.decades === 12, '标签覆盖率：语种/年代各 12 首');
+
+r = await call('GET', '/api/song-tags', { query: 'id=r1' });
+ok(r.status === 200 && r.data.entry && r.data.entry.src === 'ai', '歌曲标签：r1 来源为 AI');
+ok(r.data.entry.g[0] === '民谣' && r.data.entry.l[0] === '华语', '歌曲标签：r1 流派/语种正确');
+ok(r.data.entry.locked === false, '歌曲标签：AI 标签默认未锁定');
+
+/* 手动覆盖并锁定 */
+r = await call('POST', '/api/song-tags', {
+  body: { songId: 'r1', tags: { genres: ['民谣'], styles: ['民谣'], languages: ['粤语'], decades: ['1980s'] }, locked: true }
+});
+ok(r.status === 200 && r.data.entry.src === 'manual', '手动歌曲标签：写入成功');
+ok(r.data.entry.locked === true, '手动歌曲标签：默认锁定');
+
+r = await call('GET', '/api/song-tags', { query: 'id=r1' });
+ok(r.data.effective.languages[0] === '粤语' && r.data.effective.decades[0] === '1980s', '歌曲级标签覆盖歌手级');
+
+/* 强制重跑不得覆盖锁定条目 */
+r = await call('POST', '/api/ai/tag/run', { body: { force: true } });
+ok(r.status === 200 && r.data.started === true, 'AI 重跑任务已启动');
+await waitAiJob();
+r = await call('GET', '/api/song-tags', { query: 'id=r1' });
+ok(r.data.entry.src === 'manual' && r.data.entry.l[0] === '粤语', 'AI 重跑：锁定的手动标签未被覆盖');
+
+r = await call('POST', '/api/song-tags', { body: { songId: 'r2', tags: {} } });
+ok(r.status === 400, '空标签被拒绝');
+
+r = await call('POST', '/api/song-tags', { body: { songId: 'r1', action: 'delete' } });
+ok(r.status === 200 && r.data.deleted === 'r1', '删除歌曲标签成功');
+r = await call('GET', '/api/song-tags', { query: 'id=r1' });
+ok(r.data.entry === null, '删除后歌曲标签为空');
+
+r = await call('GET', '/api/status');
+ok(r.data.songTags === 11, '状态：歌曲标签 11 首');
+ok(r.data.ai && r.data.ai.enabled === true, '状态：AI 已启用');
 
 r = await call('GET', '/api/logs');
 ok(r.status === 200 && Array.isArray(r.data.lines) && r.data.lines.length > 0, '/api/logs：可读取运行日志');
@@ -253,4 +360,4 @@ ok(r.status === 200 && r.data.ok, '删除画像「老妹」成功');
 r = await call('POST', '/api/profiles', { body: { action: 'delete', id: 'me' } });
 ok(r.status === 400 && /至少保留/.test(r.data.error), '最后一个画像不允许删除');
 
-console.log('\n全部 ' + pass + ' 项自测通过（personal-radio v0.1.0 P1）');
+console.log('\n全部 ' + pass + ' 项自测通过（personal-radio v0.2.0）');

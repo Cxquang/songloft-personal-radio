@@ -73,7 +73,16 @@
     profiles: [],
     currentId: '',
     manualArtists: {},
-    manualTags: {}
+    manualTags: {},
+    aiConfig: null,
+    providers: [],
+    tagGroups: [],
+    coverage: null,
+    aiJob: null,
+    aiPollTimer: null,
+    editorSongId: '',
+    editorSong: null,
+    editorTags: { genres: [], styles: [], languages: [], decades: [] }
   };
 
   function currentProfile() {
@@ -194,6 +203,7 @@
         + '<span class="song-reason">' + esc(item.reason || '') + '</span>'
         + '</span>'
         + '<span class="song-badges">' + badges.join('') + '</span>'
+        + '<button class="btn ghost small tag-btn" data-song-tag="' + esc(item.songId) + '">标签</button>'
         + '<span class="song-score" title="' + esc(tip) + '">' + (item.score || 0) + '</span>'
         + '</li>';
     }).join('');
@@ -276,6 +286,7 @@
     state.manualTags = Object.assign({}, manual.tags || {});
     renderWeightList('manual-artists', state.manualArtists, 'artist');
     renderWeightList('manual-tags', state.manualTags, 'tag');
+    renderTagCloud();
   }
 
   function renderWeightList(containerId, map, kind) {
@@ -444,6 +455,359 @@
     }).catch(function (err) { toast(err.message); });
   }
 
+  /* ---------- 标签云 ---------- */
+  function formatWeight(value) {
+    var n = Number(value) || 0;
+    return (n > 0 ? '+' : '') + n.toFixed(1).replace(/\.0$/, '');
+  }
+
+  function loadTagDictionary() {
+    return apiGet('/api/tag-dictionary').then(function (data) {
+      state.tagGroups = data.groups || [];
+      if (data.providers && data.providers.length) state.providers = data.providers;
+      renderProviderOptions();
+      renderTagCloud();
+    }).catch(function () { /* ignore */ });
+  }
+
+  function renderProviderOptions() {
+    var select = $('ai-provider');
+    if (!select || !state.providers.length) return;
+    var wanted = (state.aiConfig && state.aiConfig.provider) || select.value || 'deepseek';
+    select.innerHTML = state.providers.map(function (item) {
+      return '<option value="' + esc(item.id) + '">' + esc(item.name) + '</option>';
+    }).join('');
+    var exists = false;
+    for (var i = 0; i < state.providers.length; i++) {
+      if (state.providers[i].id === wanted) exists = true;
+    }
+    select.value = exists ? wanted : state.providers[0].id;
+  }
+
+  function renderTagCloud() {
+    var box = $('tag-cloud');
+    if (!box) return;
+    if (!state.tagGroups.length) {
+      box.innerHTML = '<p class="tip small">标签表加载中…</p>';
+      return;
+    }
+    box.innerHTML = state.tagGroups.map(function (group) {
+      var chips = group.tags.map(function (tag) {
+        var on = state.manualTags[tag] !== undefined;
+        var label = tag + (on ? ' ' + formatWeight(state.manualTags[tag]) : '');
+        return '<button class="chip-select' + (on ? ' on' : '') + '" data-tag="' + esc(tag) + '">' + esc(label) + '</button>';
+      }).join('');
+      return '<div class="tag-group"><span class="tag-group-name">' + esc(group.name) + '</span>'
+        + '<div class="chip-line">' + chips + '</div></div>';
+    }).join('');
+  }
+
+  function onTagCloudClick(event) {
+    var target = event.target;
+    if (target && target.closest) target = target.closest('[data-tag]');
+    var tag = target && target.getAttribute && target.getAttribute('data-tag');
+    if (!tag) return;
+    if (state.manualTags[tag] === undefined) {
+      state.manualTags[tag] = 0.6;
+      toast('已加入「' + tag + '」，默认权重 +0.6');
+    } else {
+      delete state.manualTags[tag];
+      toast('已移除「' + tag + '」');
+    }
+    renderTagCloud();
+    renderWeightList('manual-tags', state.manualTags, 'tag');
+  }
+
+  /* ---------- AI 配置与补全 ---------- */
+  function loadAiStatus() {
+    return apiGet('/api/ai/status').then(function (data) {
+      state.aiConfig = data.config || {};
+      state.aiJob = data.job || null;
+      state.coverage = data.coverage || null;
+      if (data.providers && data.providers.length && !state.providers.length) {
+        state.providers = data.providers;
+        renderProviderOptions();
+      }
+      renderAiForm();
+      renderCoverage();
+      renderAiJob();
+    }).catch(function () { /* ignore */ });
+  }
+
+  function renderAiForm() {
+    var cfg = state.aiConfig || {};
+    $('ai-enabled').checked = Boolean(cfg.enabled);
+    $('ai-provider').value = cfg.provider || 'deepseek';
+    $('ai-api-url').value = cfg.apiUrl || '';
+    $('ai-model').value = cfg.model || '';
+    $('ai-timeout').value = cfg.timeoutSec || 30;
+    $('ai-batch').value = cfg.batchSize || 20;
+    $('ai-confidence').value = cfg.minConfidence === undefined ? 0.7 : cfg.minConfidence;
+    $('ai-limit').value = cfg.maxSongsPerRun || 0;
+    $('ai-json').checked = cfg.jsonMode !== false;
+    $('ai-language').checked = cfg.autoTagLanguage !== false;
+    var headers = cfg.headers || {};
+    $('ai-headers').value = Object.keys(headers).length ? JSON.stringify(headers, null, 2) : '';
+    $('ai-api-key').value = '';
+    $('ai-api-key').placeholder = cfg.hasKey ? '已保存密钥，留空不修改' : 'sk-...';
+    $('ai-state').textContent = cfg.enabled ? ('已启用 · ' + (cfg.model || '未填模型')) : '未启用';
+  }
+
+  function onProviderChange() {
+    var id = $('ai-provider').value;
+    for (var i = 0; i < state.providers.length; i++) {
+      var item = state.providers[i];
+      if (item.id !== id) continue;
+      if (item.baseUrl) $('ai-api-url').value = item.baseUrl;
+      if (item.defaultModel) $('ai-model').value = item.defaultModel;
+      return;
+    }
+  }
+
+  function collectAiConfig() {
+    var headersText = $('ai-headers').value.trim();
+    var headers = {};
+    if (headersText) {
+      try { headers = JSON.parse(headersText); }
+      catch (e) { throw new Error('自定义请求头不是合法 JSON'); }
+    }
+    var payload = {
+      aiEnabled: $('ai-enabled').checked,
+      aiProvider: $('ai-provider').value,
+      aiApiUrl: $('ai-api-url').value.trim(),
+      aiModel: $('ai-model').value.trim(),
+      aiTimeoutSec: Number($('ai-timeout').value),
+      aiBatchSize: Number($('ai-batch').value),
+      aiMinConfidence: Number($('ai-confidence').value),
+      aiMaxSongsPerRun: Number($('ai-limit').value),
+      aiJsonMode: $('ai-json').checked,
+      autoTagLanguage: $('ai-language').checked,
+      aiHeaders: headers
+    };
+    var key = $('ai-api-key').value.trim();
+    if (key) payload.aiApiKey = key;
+    return payload;
+  }
+
+  function saveAiConfig(silent) {
+    var payload;
+    try { payload = collectAiConfig(); }
+    catch (e) {
+      if (!silent) toast(e.message);
+      return Promise.reject(e);
+    }
+    return apiPost('/api/config', { config: payload }).then(function () {
+      if (!silent) toast('AI 设置已保存');
+      return loadAiStatus();
+    }).catch(function (err) {
+      if (!silent) toast(err.message);
+      throw err;
+    });
+  }
+
+  function fillModelList(models) {
+    var list = $('ai-model-list');
+    list.innerHTML = (models || []).map(function (id) {
+      return '<option value="' + esc(id) + '"></option>';
+    }).join('');
+    if (models && models.length && !$('ai-model').value.trim()) $('ai-model').value = models[0];
+  }
+
+  function testAi() {
+    $('ai-test-result').textContent = '保存配置并检测中…';
+    saveAiConfig(true).then(function () {
+      return apiPost('/api/ai/test', {});
+    }).then(function (data) {
+      var models = data.models || [];
+      fillModelList(models);
+      var text = '已连接' + (data.elapsedMs ? ' · ' + data.elapsedMs + ' ms' : '')
+        + (models.length ? ' · 模型 ' + models.length + ' 个' : '');
+      if (data.warning) text += '（' + data.warning + '）';
+      $('ai-test-result').textContent = text;
+      toast('连接成功');
+    }).catch(function (err) {
+      $('ai-test-result').textContent = '连接失败：' + err.message;
+      toast('连接失败');
+    });
+  }
+
+  function startAiTag() {
+    var cfg = state.aiConfig || {};
+    if (!$('ai-enabled').checked || !cfg.hasKey) {
+      return toast('请先保存已启用的 AI 配置（需要 API 密钥）');
+    }
+    apiPost('/api/ai/tag/run', { force: $('ai-force').checked }).then(function () {
+      toast('补全任务已开始');
+      startAiPolling();
+    }).catch(function (err) { toast(err.message); });
+  }
+
+  function stopAiTag() {
+    apiPost('/api/ai/tag/stop', {}).then(function () {
+      toast('已请求停止，当前批次结束后生效');
+    }).catch(function (err) { toast(err.message); });
+  }
+
+  function startAiPolling() {
+    if (state.aiPollTimer) return;
+    state.aiPollTimer = setInterval(function () {
+      apiGet('/api/ai/tag/status').then(function (data) {
+        state.aiJob = data.job || null;
+        renderAiJob();
+        if (!state.aiJob || !state.aiJob.running) {
+          stopAiPolling();
+          loadAiStatus();
+          loadRecommend();
+          loadStatus();
+        }
+      }).catch(function () { /* ignore */ });
+    }, 1500);
+    renderAiJob();
+  }
+
+  function stopAiPolling() {
+    if (state.aiPollTimer) {
+      clearInterval(state.aiPollTimer);
+      state.aiPollTimer = null;
+    }
+  }
+
+  function renderAiJob() {
+    var job = state.aiJob;
+    var text = '尚未运行补全任务';
+    var ratio = 0;
+    if (job) {
+      if (job.total) ratio = Math.min(1, (job.done || 0) / job.total);
+      text = (job.running ? '运行中' : '已结束')
+        + ' · 进度 ' + (job.done || 0) + '/' + (job.total || 0)
+        + ' · 写入 ' + (job.stored || 0)
+        + ' · 跳过 ' + (job.skipped || 0)
+        + ' · 失败 ' + (job.failed || 0)
+        + ' · 批次 ' + (job.batches || 0);
+      if (job.message) text += ' · ' + job.message;
+      if (job.error) text += ' · 错误：' + job.error;
+    }
+    $('ai-job-text').textContent = text;
+    $('ai-progress-fill').style.width = Math.round(ratio * 100) + '%';
+    $('btn-run-ai').disabled = Boolean(job && job.running);
+    $('btn-stop-ai').disabled = !(job && job.running);
+    if (job && job.running) startAiPolling();
+  }
+
+  function renderCoverage() {
+    var box = $('ai-coverage');
+    var c = state.coverage;
+    if (!c) { box.innerHTML = ''; return; }
+    var total = c.total || 0;
+    function cell(name, value) {
+      var percent = total ? Math.round((value / total) * 100) : 0;
+      return '<div class="coverage-cell"><span class="coverage-name">' + name + '</span>'
+        + '<span class="coverage-value">' + value + '/' + total + '</span>'
+        + '<div class="coverage-track"><span style="width:' + percent + '%"></span></div></div>';
+    }
+    box.innerHTML = cell('任一标签', c.any || 0)
+      + cell('四维完整', c.full || 0)
+      + cell('流派', c.genres || 0)
+      + cell('风格', c.styles || 0)
+      + cell('语种', c.languages || 0)
+      + cell('年代', c.decades || 0);
+  }
+
+  /* ---------- 单曲标签编辑 ---------- */
+  function onRecommendClick(event) {
+    var target = event.target;
+    if (target && target.closest) target = target.closest('[data-song-tag]');
+    var songId = target && target.getAttribute && target.getAttribute('data-song-tag');
+    if (songId) openTagEditor(songId);
+  }
+
+  function openTagEditor(songId) {
+    apiGet('/api/song-tags?id=' + encodeURIComponent(songId)).then(function (data) {
+      var entry = data.entry || { g: [], s: [], l: [], d: [], locked: false, src: '' };
+      state.editorSongId = songId;
+      state.editorSong = data.song || null;
+      state.editorTags = {
+        genres: (entry.g || []).slice(),
+        styles: (entry.s || []).slice(),
+        languages: (entry.l || []).slice(),
+        decades: (entry.d || []).slice()
+      };
+      $('tag-editor-title').textContent = data.song ? (data.song.title || songId) : ('歌曲标签：' + songId);
+      var sub = data.song
+        ? ((data.song.artist || '未知歌手') + (data.song.album ? ' · ' + data.song.album : ''))
+        : songId;
+      $('tag-editor-sub').textContent = sub + ' · 来源 ' + (entry.src || '未标注');
+      $('tag-editor-locked').checked = entry.locked !== false;
+      renderEditorGroups();
+      $('tag-editor').hidden = false;
+    }).catch(function (err) { toast(err.message); });
+  }
+
+  function renderEditorGroups() {
+    var box = $('tag-editor-groups');
+    if (!state.tagGroups.length) {
+      box.innerHTML = '<p class="tip small">标签表未加载</p>';
+      return;
+    }
+    box.innerHTML = state.tagGroups.map(function (group) {
+      var selected = state.editorTags[group.dimension] || [];
+      var chips = group.tags.map(function (tag) {
+        var on = selected.indexOf(tag) >= 0;
+        return '<button class="chip-select' + (on ? ' on' : '') + '" data-editor-tag="' + esc(tag)
+          + '" data-dimension="' + esc(group.dimension) + '">' + esc(tag) + '</button>';
+      }).join('');
+      return '<div class="tag-group"><span class="tag-group-name">' + esc(group.name) + '</span>'
+        + '<div class="chip-line">' + chips + '</div></div>';
+    }).join('');
+  }
+
+  function onEditorTagClick(event) {
+    var target = event.target;
+    if (target && target.closest) target = target.closest('[data-editor-tag]');
+    var tag = target && target.getAttribute && target.getAttribute('data-editor-tag');
+    if (!tag) return;
+    var dim = target.getAttribute('data-dimension');
+    var list = state.editorTags[dim] || [];
+    var index = list.indexOf(tag);
+    if (index >= 0) list.splice(index, 1);
+    else list.push(tag);
+    state.editorTags[dim] = list;
+    renderEditorGroups();
+  }
+
+  function closeTagEditor() {
+    $('tag-editor').hidden = true;
+    state.editorSongId = '';
+    state.editorSong = null;
+  }
+
+  function saveSongTags() {
+    if (!state.editorSongId) return;
+    if (!state.editorTags.genres.length && !state.editorTags.styles.length
+      && !state.editorTags.languages.length && !state.editorTags.decades.length) {
+      return toast('至少选择一个标签，或点「清除标签」');
+    }
+    apiPost('/api/song-tags', {
+      songId: state.editorSongId,
+      tags: state.editorTags,
+      locked: $('tag-editor-locked').checked
+    }).then(function () {
+      toast('歌曲标签已保存');
+      closeTagEditor();
+      loadRecommend();
+      loadAiStatus();
+    }).catch(function (err) { toast(err.message); });
+  }
+
+  function deleteSongTags() {
+    if (!state.editorSongId) return;
+    apiPost('/api/song-tags', { songId: state.editorSongId, action: 'delete' }).then(function () {
+      toast('歌曲标签已清除');
+      closeTagEditor();
+      loadRecommend();
+      loadAiStatus();
+    }).catch(function (err) { toast(err.message); });
+  }
   /* ---------- 日志 ---------- */
   function loadLogs() {
     return apiGet('/api/logs').then(function (data) {
@@ -500,6 +864,21 @@
     $('btn-save-config').addEventListener('click', saveConfig);
     $('btn-sync-favorites').addEventListener('click', syncFavorites);
     $('btn-clear-logs').addEventListener('click', clearLogs);
+
+    $('recommend-list').addEventListener('click', onRecommendClick);
+    $('ai-provider').addEventListener('change', onProviderChange);
+    $('btn-save-ai').addEventListener('click', function () { saveAiConfig(false); });
+    $('btn-test-ai').addEventListener('click', testAi);
+    $('btn-run-ai').addEventListener('click', startAiTag);
+    $('btn-stop-ai').addEventListener('click', stopAiTag);
+    $('tag-cloud').addEventListener('click', onTagCloudClick);
+    $('tag-editor-groups').addEventListener('click', onEditorTagClick);
+    $('btn-save-song-tags').addEventListener('click', saveSongTags);
+    $('btn-delete-song-tags').addEventListener('click', deleteSongTags);
+    $('btn-close-tag-editor').addEventListener('click', closeTagEditor);
+    $('tag-editor').addEventListener('click', function (event) {
+      if (event.target === $('tag-editor')) closeTagEditor();
+    });
   }
 
   function init() {
@@ -507,7 +886,7 @@
     loadStatus();
     loadProfiles()
       .then(function () {
-        return Promise.all([loadRecommend(), loadSingerTags(), loadConfig(), loadLogs()]);
+        return Promise.all([loadRecommend(), loadSingerTags(), loadConfig(), loadLogs(), loadTagDictionary(), loadAiStatus()]);
       })
       .then(function () {
         setInterval(function () {
