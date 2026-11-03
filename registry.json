@@ -1,0 +1,6 @@
+{
+  "name": "Cxquang 的 Songloft 插件源",
+  "plugins": [
+    "https://raw.githubusercontent.com/Cxquang/songloft-personal-radio/main/plugin.json"
+  ]
+}
