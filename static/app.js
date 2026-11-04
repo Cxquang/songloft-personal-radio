@@ -78,8 +78,22 @@
     providers: [],
     tagGroups: [],
     coverage: null,
+    candidateCoverage: null,
+    libraryStats: null,
+    pending: 0,
+    lockedCount: 0,
     aiJob: null,
     aiPollTimer: null,
+    tagDetail: {
+      items: [],
+      total: 0,
+      page: 1,
+      pages: 1,
+      pageSize: 20,
+      loaded: false,
+      filter: { q: '', status: '', source: '', type: '', dim: '' }
+    },
+    detailSearchTimer: null,
     editorSongId: '',
     editorSong: null,
     editorTags: { genres: [], styles: [], languages: [], decades: [] }
@@ -524,14 +538,39 @@
       state.aiConfig = data.config || {};
       state.aiJob = data.job || null;
       state.coverage = data.coverage || null;
+      state.candidateCoverage = data.candidateCoverage || null;
+      state.libraryStats = data.libraryStats || null;
+      state.pending = data.pending || 0;
+      state.lockedCount = data.lockedCount || 0;
       if (data.providers && data.providers.length && !state.providers.length) {
         state.providers = data.providers;
         renderProviderOptions();
       }
       renderAiForm();
+      renderLibraryStats();
       renderCoverage();
       renderAiJob();
+      renderAiResults();
     }).catch(function () { /* ignore */ });
+  }
+
+  function renderLibraryStats() {
+    var box = $('ai-library-stats');
+    if (!box) return;
+    var stats = state.libraryStats;
+    if (!stats) {
+      box.textContent = '曲库统计读取中…';
+      return;
+    }
+    var text = '全库 ' + (stats.total || 0) + ' 首'
+      + ' · 本地 ' + (stats.local || 0)
+      + ' · 网络 ' + (stats.remote || 0)
+      + (stats.radio ? ' · 电台 ' + stats.radio : '')
+      + ' · 待补全 ' + state.pending + ' 首'
+      + ' · 已锁定 ' + state.lockedCount + ' 首'
+      + ' · 宿主自带流派 ' + (stats.withGenre || 0) + ' 首'
+      + ' · 宿主自带年份 ' + (stats.withYear || 0) + ' 首';
+    box.textContent = text;
   }
 
   function renderAiForm() {
@@ -659,6 +698,7 @@
           loadAiStatus();
           loadRecommend();
           loadStatus();
+          loadTagDetail(state.tagDetail.page);
         }
       }).catch(function () { /* ignore */ });
     }, 1500);
@@ -684,6 +724,7 @@
         + ' · 跳过 ' + (job.skipped || 0)
         + ' · 失败 ' + (job.failed || 0)
         + ' · 批次 ' + (job.batches || 0);
+      if (job.prefilled) text += ' · 语种预填 ' + job.prefilled;
       if (job.message) text += ' · ' + job.message;
       if (job.error) text += ' · 错误：' + job.error;
     }
@@ -691,7 +732,17 @@
     $('ai-progress-fill').style.width = Math.round(ratio * 100) + '%';
     $('btn-run-ai').disabled = Boolean(job && job.running);
     $('btn-stop-ai').disabled = !(job && job.running);
+    renderAiResults();
     if (job && job.running) startAiPolling();
+  }
+
+  function coverageFilterOf(key) {
+    if (key === 'any') return { status: 'any', dim: '' };
+    if (key === 'full') return { status: 'full', dim: '' };
+    if (key === 'genres' || key === 'styles' || key === 'languages' || key === 'decades') {
+      return { status: '', dim: key };
+    }
+    return null;
   }
 
   function renderCoverage() {
@@ -699,18 +750,241 @@
     var c = state.coverage;
     if (!c) { box.innerHTML = ''; return; }
     var total = c.total || 0;
-    function cell(name, value) {
-      var percent = total ? Math.round((value / total) * 100) : 0;
-      return '<div class="coverage-cell"><span class="coverage-name">' + name + '</span>'
-        + '<span class="coverage-value">' + value + '/' + total + '</span>'
-        + '<div class="coverage-track"><span style="width:' + percent + '%"></span></div></div>';
+    var f = state.tagDetail.filter;
+    function isActive(key) {
+      var target = coverageFilterOf(key);
+      if (!target) return false;
+      return f.dim === target.dim && f.status === target.status;
     }
-    box.innerHTML = cell('任一标签', c.any || 0)
-      + cell('四维完整', c.full || 0)
-      + cell('流派', c.genres || 0)
-      + cell('风格', c.styles || 0)
-      + cell('语种', c.languages || 0)
-      + cell('年代', c.decades || 0);
+    function cell(name, value, key) {
+      var percent = total ? Math.round((value / total) * 100) : 0;
+      return '<button type="button" class="coverage-cell' + (isActive(key) ? ' active' : '')
+        + '" data-coverage="' + key + '" title="点击筛选歌曲标签明细">'
+        + '<span class="coverage-name">' + name + '</span>'
+        + '<span class="coverage-value">' + value + '/' + total + '</span>'
+        + '<div class="coverage-track"><span style="width:' + percent + '%"></span></div></button>';
+    }
+    box.innerHTML = cell('任一标签', c.any || 0, 'any')
+      + cell('四维完整', c.full || 0, 'full')
+      + cell('流派', c.genres || 0, 'genres')
+      + cell('风格', c.styles || 0, 'styles')
+      + cell('语种', c.languages || 0, 'languages')
+      + cell('年代', c.decades || 0, 'decades');
+  }
+
+  function onCoverageClick(event) {
+    var target = event.target;
+    if (target && target.closest) target = target.closest('[data-coverage]');
+    var key = target && target.getAttribute && target.getAttribute('data-coverage');
+    if (!key) return;
+    var next = coverageFilterOf(key);
+    if (!next) return;
+    var f = state.tagDetail.filter;
+    var same = f.dim === next.dim && f.status === next.status;
+    f.dim = same ? '' : next.dim;
+    f.status = same ? '' : next.status;
+    $('tag-filter-status').value = f.status;
+    renderCoverage();
+    renderTagFilterTip();
+    loadTagDetail(1);
+    if ($('tag-detail-card') && $('tag-detail-card').scrollIntoView) {
+      $('tag-detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function renderAiResults() {
+    var box = $('ai-result-list');
+    var meta = $('ai-result-meta');
+    if (!box || !meta) return;
+    var results = (state.aiJob && state.aiJob.results) || [];
+    if (!results.length) {
+      box.innerHTML = '<p class="tip small">本次任务还没有逐首结果。</p>';
+      meta.textContent = '';
+      return;
+    }
+    var ok = 0, skip = 0, fail = 0;
+    for (var i = 0; i < results.length; i++) {
+      if (results[i].status === 'ok') ok += 1;
+      else if (results[i].status === 'fail') fail += 1;
+      else skip += 1;
+    }
+    var shown = results.slice().reverse().slice(0, 100);
+    meta.textContent = '写入 ' + ok + ' · 跳过 ' + skip + ' · 失败 ' + fail
+      + '（共 ' + results.length + ' 条，最新在前）';
+    box.innerHTML = shown.map(function (row) {
+      var statusText = row.status === 'ok' ? '写入' : (row.status === 'fail' ? '失败' : '跳过');
+      var tags = '';
+      if (row.tags) {
+        var names = [['流派', row.tags.genres], ['风格', row.tags.styles], ['语种', row.tags.languages], ['年代', row.tags.decades]];
+        var parts = [];
+        for (var d = 0; d < names.length; d++) {
+          if (names[d][1] && names[d][1].length) parts.push(names[d][0] + ' ' + names[d][1].join('/'));
+        }
+        tags = parts.join(' · ');
+      }
+      return '<div class="result-row ' + esc(row.status) + '">'
+        + '<span class="result-status">' + statusText + '</span>'
+        + '<span class="result-song">' + esc(row.title || row.id)
+        + '<i>' + esc(row.artist || '') + '</i></span>'
+        + '<span class="result-tags">' + esc(tags) + '</span>'
+        + '<span class="result-reason">' + esc(row.reason || '') + '</span>'
+        + '</div>';
+    }).join('');
+  }
+
+  /* ---------- 歌曲标签明细 ---------- */
+  var DIM_NAMES = [['genres', '流派'], ['styles', '风格'], ['languages', '语种'], ['decades', '年代']];
+  var STATUS_NAMES = { any: '任一标签', full: '四维完整', partial: '部分缺失', empty: '未标注', pending: '待补全', locked: '已锁定' };
+  var DIM_SHORT = { g: '流派', s: '风格', l: '语种', d: '年代' };
+  var SOURCE_NAMES = { ai: 'AI', manual: '手动', auto: '本地预填' };
+
+  function renderTagFilterTip() {
+    var f = state.tagDetail.filter;
+    var parts = [];
+    if (f.dim) {
+      var dimName = '';
+      for (var i = 0; i < DIM_NAMES.length; i++) {
+        if (DIM_NAMES[i][0] === f.dim) dimName = DIM_NAMES[i][1];
+      }
+      parts.push('有「' + (dimName || f.dim) + '」标签');
+    }
+    if (f.status) parts.push('状态：' + (STATUS_NAMES[f.status] || f.status));
+    if (f.source) parts.push('来源：' + (SOURCE_NAMES[f.source] || f.source));
+    if (f.type) parts.push('类型：' + (f.type === 'local' ? '本地' : (f.type === 'remote' ? '网络' : '电台')));
+    if (f.q) parts.push('关键词：' + f.q);
+    $('tag-filter-tip').textContent = parts.length
+      ? ('当前筛选 · ' + parts.join(' · '))
+      : '当前未筛选，按最近更新时间倒序显示。';
+  }
+
+  function tagDetailQuery() {
+    var f = state.tagDetail.filter;
+    var params = ['page=' + state.tagDetail.page, 'pageSize=' + state.tagDetail.pageSize];
+    if (f.q) params.push('q=' + encodeURIComponent(f.q));
+    if (f.status) params.push('status=' + encodeURIComponent(f.status));
+    if (f.source) params.push('source=' + encodeURIComponent(f.source));
+    if (f.type) params.push('type=' + encodeURIComponent(f.type));
+    if (f.dim) params.push('dim=' + encodeURIComponent(f.dim));
+    return '/api/song-tags/list?' + params.join('&');
+  }
+
+  function loadTagDetail(page) {
+    var detail = state.tagDetail;
+    if (page) detail.page = page;
+    return apiGet(tagDetailQuery()).then(function (data) {
+      detail.items = data.items || [];
+      detail.total = data.total || 0;
+      detail.pages = data.pages || 1;
+      detail.page = data.page || detail.page;
+      detail.pageSize = data.pageSize || detail.pageSize;
+      detail.loaded = true;
+      if (data.coverage) state.coverage = data.coverage;
+      if (data.libraryStats) state.libraryStats = data.libraryStats;
+      state.pending = data.pending || 0;
+      state.lockedCount = data.lockedCount || 0;
+      renderLibraryStats();
+      renderCoverage();
+      renderTagDetail();
+      renderTagFilterTip();
+    }).catch(function (err) {
+      $('tag-detail-list').innerHTML = '<p class="tip small">加载失败：' + esc(err.message) + '</p>';
+    });
+  }
+
+  function tagChips(names) {
+    if (!names || !names.length) return '<span class="tag-dim missing">未标注</span>';
+    return names.map(function (name) {
+      return '<span class="tag-dim">' + esc(name) + '</span>';
+    }).join('');
+  }
+
+  function renderTagDetail() {
+    var detail = state.tagDetail;
+    var box = $('tag-detail-list');
+    var meta = $('tag-detail-meta');
+    meta.textContent = '过滤后 ' + detail.total + ' 首 · 第 ' + detail.page + '/' + detail.pages + ' 页';
+    if (!detail.items.length) {
+      box.innerHTML = '<p class="tip small">没有符合条件的歌曲，试试重置筛选。</p>';
+      $('tag-page-text').textContent = '- / -';
+      $('tag-page-prev').disabled = true;
+      $('tag-page-next').disabled = true;
+      return;
+    }
+    box.innerHTML = detail.items.map(function (row) {
+      var tags = row.tags || {};
+      var missing = (row.missing || []).map(function (k) { return DIM_SHORT[k] || k; });
+      var metaParts = [
+        row.type === 'local' ? '本地' : (row.type === 'remote' ? '网络' : (row.type || '未知类型'))
+      ];
+      metaParts.push('来源 ' + (SOURCE_NAMES[row.source] || (row.source || '未标注')));
+      if (row.confidence) metaParts.push('置信度 ' + Number(row.confidence).toFixed(2));
+      metaParts.push(row.locked ? '已锁定' : '未锁定');
+      metaParts.push(missing.length ? ('缺 ' + missing.join('/')) : '四维完整');
+      if (row.hostGenre) metaParts.push('宿主流派 ' + row.hostGenre);
+      if (row.hostYear) metaParts.push('宿主年份 ' + row.hostYear);
+      var dimLines = DIM_NAMES.map(function (pair) {
+        return '<div class="tag-dim-line"><i>' + pair[1] + '</i>' + tagChips(tags[pair[0]]) + '</div>';
+      }).join('');
+      return '<div class="tag-detail-item">'
+        + '<div class="tag-detail-song"><strong>' + esc(row.title || row.id) + '</strong>'
+        + '<span class="tip small">' + esc(row.artist || '未知歌手')
+        + (row.album ? ' · ' + esc(row.album) : '') + '</span></div>'
+        + '<div class="tag-detail-tags">' + dimLines + '</div>'
+        + '<div class="tag-detail-side"><span class="tip small">' + esc(metaParts.join(' · ')) + '</span>'
+        + '<button class="btn ghost small" data-edit-song="' + esc(row.id) + '">标签</button></div>'
+        + '</div>';
+    }).join('');
+    $('tag-page-text').textContent = '第 ' + detail.page + ' / ' + detail.pages + ' 页 · 共 ' + detail.total + ' 首';
+    $('tag-page-prev').disabled = detail.page <= 1;
+    $('tag-page-next').disabled = detail.page >= detail.pages;
+  }
+
+  function onTagDetailClick(event) {
+    var target = event.target;
+    if (target && target.closest) target = target.closest('[data-edit-song]');
+    var id = target && target.getAttribute && target.getAttribute('data-edit-song');
+    if (id) openTagEditor(id);
+  }
+
+  function applyTagFilters() {
+    var f = state.tagDetail.filter;
+    f.status = $('tag-filter-status').value;
+    f.source = $('tag-filter-source').value;
+    f.type = $('tag-filter-type').value;
+    state.tagDetail.pageSize = Number($('tag-filter-size').value) || 20;
+    state.tagDetail.page = 1;
+    renderCoverage();
+    renderTagFilterTip();
+    loadTagDetail(1);
+  }
+
+  function onTagFilterInput() {
+    if (state.detailSearchTimer) clearTimeout(state.detailSearchTimer);
+    state.detailSearchTimer = setTimeout(function () {
+      state.tagDetail.filter.q = $('tag-filter-q').value.trim();
+      state.tagDetail.page = 1;
+      renderTagFilterTip();
+      loadTagDetail(1);
+    }, 320);
+  }
+
+  function resetTagFilter() {
+    state.tagDetail.filter = { q: '', status: '', source: '', type: '', dim: '' };
+    state.tagDetail.page = 1;
+    $('tag-filter-q').value = '';
+    $('tag-filter-status').value = '';
+    $('tag-filter-source').value = '';
+    $('tag-filter-type').value = '';
+    renderCoverage();
+    renderTagFilterTip();
+    loadTagDetail(1);
+  }
+
+  function goTagPage(delta) {
+    var detail = state.tagDetail;
+    var next = detail.page + delta;
+    if (next < 1 || next > detail.pages) return;
+    loadTagDetail(next);
   }
 
   /* ---------- 单曲标签编辑 ---------- */
@@ -796,6 +1070,7 @@
       closeTagEditor();
       loadRecommend();
       loadAiStatus();
+      loadTagDetail(state.tagDetail.page);
     }).catch(function (err) { toast(err.message); });
   }
 
@@ -806,6 +1081,7 @@
       closeTagEditor();
       loadRecommend();
       loadAiStatus();
+      loadTagDetail(state.tagDetail.page);
     }).catch(function (err) { toast(err.message); });
   }
   /* ---------- 日志 ---------- */
@@ -879,6 +1155,17 @@
     $('tag-editor').addEventListener('click', function (event) {
       if (event.target === $('tag-editor')) closeTagEditor();
     });
+
+    $('ai-coverage').addEventListener('click', onCoverageClick);
+    $('tag-detail-list').addEventListener('click', onTagDetailClick);
+    $('tag-filter-q').addEventListener('input', onTagFilterInput);
+    $('tag-filter-status').addEventListener('change', applyTagFilters);
+    $('tag-filter-source').addEventListener('change', applyTagFilters);
+    $('tag-filter-type').addEventListener('change', applyTagFilters);
+    $('tag-filter-size').addEventListener('change', applyTagFilters);
+    $('btn-tag-filter-reset').addEventListener('click', resetTagFilter);
+    $('tag-page-prev').addEventListener('click', function () { goTagPage(-1); });
+    $('tag-page-next').addEventListener('click', function () { goTagPage(1); });
   }
 
   function init() {
@@ -886,7 +1173,7 @@
     loadStatus();
     loadProfiles()
       .then(function () {
-        return Promise.all([loadRecommend(), loadSingerTags(), loadConfig(), loadLogs(), loadTagDictionary(), loadAiStatus()]);
+        return Promise.all([loadRecommend(), loadSingerTags(), loadConfig(), loadLogs(), loadTagDictionary(), loadAiStatus(), loadTagDetail(1)]);
       })
       .then(function () {
         setInterval(function () {

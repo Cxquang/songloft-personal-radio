@@ -559,10 +559,24 @@ textarea:focus {
 }
 
 .coverage-cell {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--card-soft);
   padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.coverage-cell:hover { border-color: var(--accent); }
+
+.coverage-cell.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .coverage-name { font-size: 12px; color: var(--text-soft); }
@@ -684,4 +698,192 @@ textarea:focus {
 @media (max-width: 560px) {
   .tag-group { flex-direction: column; gap: 4px; }
   .tag-group-name { flex: none; padding-top: 0; }
+}
+
+/* ---------- 逐首结果 ---------- */
+.result-box {
+  margin-top: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--card-soft);
+  padding: 8px 12px;
+}
+
+.result-box summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-soft);
+  outline: none;
+}
+
+.result-box summary:hover { color: var(--accent); }
+
+.result-box[open] summary { margin-bottom: 8px; }
+
+.result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.result-row {
+  display: grid;
+  grid-template-columns: 46px minmax(120px, 1.2fr) minmax(120px, 1.6fr) minmax(100px, 1.4fr);
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  font-size: 12px;
+}
+
+.result-status {
+  font-weight: 700;
+  font-size: 11px;
+  text-align: center;
+  border-radius: 6px;
+  padding: 2px 0;
+  color: var(--text-soft);
+  background: var(--card-soft);
+}
+
+.result-row.ok .result-status { color: var(--ok); background: rgba(27, 138, 90, 0.12); }
+.result-row.fail .result-status { color: var(--danger); background: rgba(180, 35, 24, 0.12); }
+.result-row.skip .result-status { color: var(--warn); background: rgba(183, 121, 31, 0.12); }
+
+.result-song {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.result-song i {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-song, .result-tags, .result-reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-tags { color: var(--accent); }
+.result-reason { color: var(--text-soft); }
+
+/* ---------- 歌曲标签明细 ---------- */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.filter-bar input { flex: 1 1 220px; min-width: 160px; }
+
+.tag-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tag-detail-item {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(280px, 2.4fr) minmax(150px, 0.9fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-soft);
+}
+
+.tag-detail-song {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tag-detail-song strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-detail-song .tip.small { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tag-detail-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tag-dim-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.tag-dim-line i {
+  font-style: normal;
+  flex: 0 0 30px;
+  color: var(--text-soft);
+}
+
+.tag-dim {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.tag-dim.missing { color: var(--text-soft); border-style: dashed; background: transparent; }
+
+.tag-detail-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tag-detail-side .tip.small {
+  margin: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .tag-detail-item { grid-template-columns: 1fr; gap: 8px; }
+  .tag-detail-side { flex-direction: row; align-items: center; justify-content: space-between; }
+  .tag-detail-side .tip.small { text-align: left; }
+  .result-row { grid-template-columns: 46px 1fr; row-gap: 2px; }
+  .result-tags, .result-reason { grid-column: 2; }
 }

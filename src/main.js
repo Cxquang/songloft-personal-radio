@@ -9,7 +9,7 @@
  * P1 只做引擎与画像管理，不接 miot 语音桥；P2 再加 /public/hook。
  */
 
-const PLUGIN_VERSION = '0.2.0';
+const PLUGIN_VERSION = '0.2.1';
 const STORAGE_PREFIX = 'personalRadio.';
 const MODEL_VERSION = 1;
 
@@ -27,8 +27,10 @@ const SKEY = {
 };
 
 const DEFAULT_CONFIG = {
+  // 配置结构版本：v0.2.1 起候选来源默认全部歌曲（含本地）
+  configVersion: 2,
   // P1 引擎参数
-  candidateSource: 'remote',
+  candidateSource: 'all',
   poolSize: 100,
   queueBatch: 20,
   explorationRatio: 0,
@@ -63,7 +65,7 @@ const DEFAULT_CONFIG = {
 };
 
 const CONFIG_FIELDS = [
-  'candidateSource', 'poolSize', 'queueBatch', 'explorationRatio', 'manualWeight',
+  'configVersion', 'candidateSource', 'poolSize', 'queueBatch', 'explorationRatio', 'manualWeight',
   'favoriteBonus', 'libraryCacheTtlSec', 'favoritesTtlMin', 'historyLimit', 'playlistSuffix',
   'songloftBase', 'miotBase', 'adminUsername', 'adminPassword', 'hookSecret',
   'pollIntervalMs', 'defaultPlayMode',
@@ -257,7 +259,12 @@ function normalizeConfig(raw) {
       if (raw[field] !== undefined && raw[field] !== null) result[field] = raw[field];
     }
   }
-  result.candidateSource = result.candidateSource === 'all' ? 'all' : 'remote';
+  // 旧配置（无 configVersion）默认是「仅网络歌曲」，v0.2.1 一次性迁移为全部歌曲；
+  // 迁移后用户仍可在「引擎设置」里手动切回仅网络。
+  const storedVersion = Number(raw && raw.configVersion) || 0;
+  result.candidateSource = result.candidateSource === 'remote' ? 'remote' : 'all';
+  if (storedVersion < 2 && result.candidateSource === 'remote') result.candidateSource = 'all';
+  result.configVersion = 2;
   result.poolSize = Math.round(clamp(result.poolSize, 10, 500));
   result.queueBatch = Math.round(clamp(result.queueBatch, 5, 100));
   result.explorationRatio = clamp(result.explorationRatio, 0, 0.6);
@@ -922,6 +929,28 @@ function filterCandidates(songs) {
   return songs.filter(isRemoteSong);
 }
 
+/** 曲库结构统计：本地/网络/电台、宿主自带 genre/year 的覆盖情况 */
+function computeLibraryStats(library) {
+  const stats = {
+    total: 0, local: 0, remote: 0, radio: 0, other: 0,
+    withFilePath: 0, withGenre: 0, withYear: 0
+  };
+  const songs = Array.isArray(library) ? library : [];
+  stats.total = songs.length;
+  for (let i = 0; i < songs.length; i++) {
+    const song = songs[i] || {};
+    const type = String(song.type || (song.file_path ? 'local' : ''));
+    if (type === 'local') stats.local += 1;
+    else if (type === 'remote') stats.remote += 1;
+    else if (type === 'radio') stats.radio += 1;
+    else stats.other += 1;
+    if (song.file_path) stats.withFilePath += 1;
+    if (String(song.genre || '').trim()) stats.withGenre += 1;
+    if (Number(song.year) > 0) stats.withYear += 1;
+  }
+  return stats;
+}
+
 /* ─── 收藏歌单同步 ─── */
 let favoriteIds = new Set();
 let favoriteSyncedAt = 0;
@@ -1378,6 +1407,61 @@ function computeTagCoverage(library) {
   return stats;
 }
 
+/** 返回缺失的维度键：g=流派 s=风格 l=语种 d=年代 */
+function songTagMissingDims(entry) {
+  const missing = [];
+  if (!entry || !entry.g.length) missing.push('g');
+  if (!entry || !entry.s.length) missing.push('s');
+  if (!entry || !entry.l.length) missing.push('l');
+  if (!entry || !entry.d.length) missing.push('d');
+  return missing;
+}
+
+function songTagStatus(entry) {
+  if (!entry || (!entry.g.length && !entry.s.length && !entry.l.length && !entry.d.length)) return 'empty';
+  return songTagMissingDims(entry).length ? 'partial' : 'full';
+}
+
+/** 待补全 = 未锁定且四维不全；锁定项视为人工已完成，AI 不再处理 */
+function countPendingTags(library) {
+  const songs = Array.isArray(library) ? library : [];
+  let pending = 0;
+  let locked = 0;
+  for (let i = 0; i < songs.length; i++) {
+    const entry = songTagEntry(songs[i] && songs[i].id);
+    if (entry && entry.locked) {
+      locked += 1;
+      continue;
+    }
+    if (songTagMissingDims(entry).length) pending += 1;
+  }
+  return { pending: pending, locked: locked };
+}
+
+function songTagDetailRow(song) {
+  const id = normalizeId(song && song.id);
+  const entry = songTagEntry(id);
+  const tags = entryToDimensions(entry);
+  return {
+    id: id,
+    title: String((song && song.title) || ''),
+    artist: String((song && song.artist) || ''),
+    album: String((song && song.album) || ''),
+    type: String((song && song.type) || ((song && song.file_path) ? 'local' : '')),
+    hasFile: Boolean(song && song.file_path),
+    hostGenre: String((song && song.genre) || ''),
+    hostYear: Number((song && song.year) || 0) || 0,
+    tags: tags,
+    singerTags: tagsForArtist(song && song.artist),
+    status: songTagStatus(entry),
+    missing: songTagMissingDims(entry),
+    source: entry ? entry.src : '',
+    confidence: entry ? entry.conf : 0,
+    locked: entry ? entry.locked : false,
+    updatedAt: entry ? entry.at : 0
+  };
+}
+
 /* ─── 语种自动识别（零成本，先跑一遍给全库补语种） ─── */
 function detectLanguage(text) {
   const value = String(text || '');
@@ -1483,7 +1567,7 @@ async function aiFetchModels() {
   return ids;
 }
 
-async function aiChatText(messages, maxTokens, jsonMode) {
+async function aiChat(messages, maxTokens, jsonMode) {
   if (!config.aiApiUrl) throw new Error('请先填写 API 地址');
   if (!config.aiApiKey) throw new Error('请先填写 API 密钥');
   if (!config.aiModel) throw new Error('请先填写模型名');
@@ -1503,8 +1587,23 @@ async function aiChatText(messages, maxTokens, jsonMode) {
   const data = await response.json();
   const choice = data && data.choices && data.choices[0];
   const content = choice && choice.message && choice.message.content;
-  if (!content) throw new Error('AI 返回内容为空');
-  return String(content);
+  const finishReason = String((choice && choice.finish_reason) || '');
+  const usage = (data && data.usage) || null;
+  if (!content) {
+    const reasoning = choice && choice.message && choice.message.reasoning_content;
+    const detail = [
+      'finish_reason=' + (finishReason || '未知'),
+      'usage=' + JSON.stringify(usage || {}),
+      reasoning ? ('reasoning_content 长度 ' + String(reasoning).length) : '无 reasoning_content'
+    ].join('，');
+    throw new Error('AI 返回内容为空（' + detail + '）');
+  }
+  return { text: String(content), finishReason: finishReason, usage: usage };
+}
+
+async function aiChatText(messages, maxTokens, jsonMode) {
+  const reply = await aiChat(messages, maxTokens, jsonMode);
+  return reply.text;
 }
 
 async function aiTestConnection() {
@@ -1563,13 +1662,17 @@ function allowedTagOfGroup(value, groupId) {
 
 async function aiTagBatch(batch) {
   const songs = [];
+  const dimNames = { g: '流派', s: '风格', l: '语种', d: '年代' };
   for (let i = 0; i < batch.length; i++) {
+    const song = batch[i];
+    const missing = songTagMissingDims(songTagEntry(song.id)).map(function (key) { return dimNames[key]; });
     songs.push({
-      id: String(batch[i].id),
-      title: String(batch[i].title || ''),
-      artist: String(batch[i].artist || ''),
-      album: String(batch[i].album || ''),
-      duration: Number(batch[i].duration) || 0
+      id: String(song.id),
+      title: String(song.title || ''),
+      artist: String(song.artist || ''),
+      album: String(song.album || ''),
+      duration: Number(song.duration) || 0,
+      missing: missing
     });
   }
   const system = [
@@ -1582,27 +1685,40 @@ async function aiTagBatch(batch) {
     '3. 粤语歌曲 language 必须填「粤语」；纯音乐或无歌词 language 填 null。',
     '4. decade 按专辑发行年代判断；不确定填 null。',
     '5. confidence 为 0~1，表示你对这组标签的整体确信度。',
-    '6. 只输出 JSON，不要解释。',
+    '6. 每首歌的 missing 列出需要补的维度；已有维度不要改动，只补 missing 中的维度，其余填 null。',
+    '7. 只输出 JSON，不要解释。',
     '{"items":[{"id":"歌曲id","genre":"流派或null","style":"风格或null","language":"语种或null","decade":"年代或null","confidence":0.8}]}'
   ].join('\n');
   const user = '请为下列歌曲打标签：\n' + JSON.stringify(songs);
-  const text = await aiChatText([
+  const reply = await aiChat([
     { role: 'system', content: system },
     { role: 'user', content: user }
   ], 4096, true);
-  const parsed = extractJson(text);
-  if (!parsed || !Array.isArray(parsed.items)) throw new Error('AI 返回缺少 items 数组');
-  return parsed.items;
+  let parsed = null;
+  try {
+    parsed = extractJson(reply.text);
+  } catch (e) {
+    throw new Error('AI 返回不是合法 JSON（finish_reason=' + (reply.finishReason || '未知')
+      + '，长度 ' + reply.text.length + '）：' + String(e.message || e).slice(0, 80));
+  }
+  if (!parsed || !Array.isArray(parsed.items)) {
+    throw new Error('AI 返回缺少 items 数组（finish_reason=' + (reply.finishReason || '未知')
+      + '，长度 ' + reply.text.length + '）');
+  }
+  return { items: parsed.items, finishReason: reply.finishReason, usage: reply.usage };
 }
+
+const AI_RESULT_LIMIT = 300;
 
 let aiJob = {
   running: false, startedAt: 0, finishedAt: 0, total: 0, done: 0, stored: 0,
-  skipped: 0, failed: 0, batches: 0, message: '', error: ''
+  skipped: 0, failed: 0, batches: 0, prefilled: 0, message: '', error: '',
+  targetScope: 'library', results: []
 };
 let aiStopRequested = false;
 
 function aiJobSnapshot() {
-  return Object.assign({}, aiJob, { stopRequested: aiStopRequested });
+  return Object.assign({}, aiJob, { stopRequested: aiStopRequested, resultLimit: AI_RESULT_LIMIT });
 }
 
 async function persistAiJob() {
@@ -1622,8 +1738,11 @@ async function loadAiJob() {
       skipped: Number(raw.skipped) || 0,
       failed: Number(raw.failed) || 0,
       batches: Number(raw.batches) || 0,
+      prefilled: Number(raw.prefilled) || 0,
       message: String(raw.message || ''),
-      error: String(raw.error || '')
+      error: String(raw.error || ''),
+      targetScope: String(raw.targetScope || 'library'),
+      results: Array.isArray(raw.results) ? raw.results.slice(-AI_RESULT_LIMIT) : []
     });
   }
 }
@@ -1632,29 +1751,64 @@ function sleepMs(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-function applyAiTagItem(item, allowedIds, minConfidence) {
+function aiResultOf(song, status, reason, entry) {
+  return {
+    id: normalizeId(song && song.id),
+    title: String((song && song.title) || ''),
+    artist: String((song && song.artist) || ''),
+    status: status,
+    reason: String(reason || ''),
+    tags: entry ? entryToDimensions(entry) : null,
+    source: entry ? entry.src : '',
+    confidence: entry ? entry.conf : 0,
+    locked: entry ? entry.locked : false,
+    at: Date.now()
+  };
+}
+
+function recordAiResult(song, status, reason, entry) {
+  aiJob.results.push(aiResultOf(song, status, reason, entry));
+  if (aiJob.results.length > AI_RESULT_LIMIT) {
+    aiJob.results.splice(0, aiJob.results.length - AI_RESULT_LIMIT);
+  }
+}
+
+/**
+ * 写入单首 AI 结果。返回 { ok, reason }：
+ * 非 force 时只补缺失维度，已有维度一律保留；force 时覆盖未锁定项。
+ */
+function applyAiTagItem(item, allowedIds, minConfidence, options) {
+  const opts = options || {};
+  const force = opts.force === true;
   const id = normalizeId(item && item.id);
-  if (!id || !allowedIds[id]) return false;
+  if (!id) return { ok: false, reason: 'AI 返回缺少歌曲 ID' };
+  if (!allowedIds[id]) return { ok: false, reason: 'AI 返回了本批次之外的歌曲 ID' };
   const confidence = clamp(Number(item.confidence) || 0, 0, 1);
-  if (confidence < minConfidence) return false;
+  if (confidence < minConfidence) {
+    return { ok: false, reason: '置信度 ' + round(confidence, 2) + ' 低于阈值 ' + round(minConfidence, 2) };
+  }
   const genre = allowedTagOfGroup(item.genre, 'genre');
   const style = allowedTagOfGroup(item.style, 'style');
   const language = allowedTagOfGroup(item.language, 'language');
   const decade = allowedTagOfGroup(item.decade, 'decade');
-  if (!genre && !style && !language && !decade) return false;
+  if (!genre && !style && !language && !decade) {
+    return { ok: false, reason: 'AI 未给出有效标签（全为 null 或不在固定枚举内）' };
+  }
   const existing = songTags[id];
-  if (existing && existing.locked) return false;
+  if (existing && existing.locked) return { ok: false, reason: '已锁定，AI 不覆盖手动标签' };
   const entry = existing || emptySongTagEntry();
-  if (genre) entry.g = [genre];
-  if (style) entry.s = [style];
-  if (language) entry.l = [language];
-  if (decade) entry.d = [decade];
+  let added = 0;
+  if (genre && (force || !entry.g.length)) { entry.g = [genre]; added += 1; }
+  if (style && (force || !entry.s.length)) { entry.s = [style]; added += 1; }
+  if (language && (force || !entry.l.length)) { entry.l = [language]; added += 1; }
+  if (decade && (force || !entry.d.length)) { entry.d = [decade]; added += 1; }
+  if (!added) return { ok: false, reason: '缺失维度没有新增标签（已有标签保留）' };
   entry.src = 'ai';
   entry.conf = confidence;
   entry.at = Date.now();
   entry.locked = false;
   songTags[id] = entry;
-  return true;
+  return { ok: true, reason: '', entry: entry };
 }
 
 async function runAiTagJob(options) {
@@ -1664,13 +1818,15 @@ async function runAiTagJob(options) {
 
   const opts = options || {};
   const force = opts.force === true;
+  // AI 覆盖全库（含本地），不再只看推荐候选；锁定项视为人工完成，直接排除
   const library = await getLibrary();
-  const candidates = filterCandidates(library);
   let targets = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const song = candidates[i];
+  for (let i = 0; i < library.length; i++) {
+    const song = library[i];
     const entry = songTagEntry(song.id);
-    if (force || !entry || (!entry.g.length && !entry.s.length)) targets.push(song);
+    if (entry && entry.locked) continue;
+    if (!force && !songTagMissingDims(entry).length) continue;
+    targets.push(song);
   }
   const limit = Number(config.aiMaxSongsPerRun) || 0;
   if (limit > 0) targets = targets.slice(0, limit);
@@ -1679,11 +1835,13 @@ async function runAiTagJob(options) {
   aiJob = {
     running: true, startedAt: Date.now(), finishedAt: 0,
     total: targets.length, done: 0, stored: 0, skipped: 0, failed: 0,
-    batches: 0, message: '准备中', error: ''
+    batches: 0, prefilled: 0, message: '准备中', error: '',
+    targetScope: 'library', results: []
   };
   await persistAiJob();
 
   // 第一阶段：零成本语种识别
+  let prefilled = 0;
   if (config.autoTagLanguage) {
     for (let i = 0; i < targets.length; i++) {
       const song = targets[i];
@@ -1699,10 +1857,15 @@ async function runAiTagJob(options) {
       entry.conf = Math.max(entry.conf || 0, 0.85);
       entry.at = Date.now();
       songTags[id] = entry;
+      prefilled += 1;
     }
     await saveSongTags();
-    aiJob.message = '已补语种，开始 AI 打标';
+    aiJob.prefilled = prefilled;
+    aiJob.message = prefilled
+      ? ('已预填语种 ' + prefilled + ' 首，开始 AI 打标')
+      : '开始 AI 打标';
     await persistAiJob();
+    if (prefilled) log('AI 标签补全：本地语种预填 ' + prefilled + ' 首');
   }
 
   const batchSize = Math.max(5, Math.min(50, Number(config.aiBatchSize) || 20));
@@ -1715,27 +1878,65 @@ async function runAiTagJob(options) {
     if (aiStopRequested) break;
     const batch = targets.slice(offset, offset + batchSize);
     const allowedIds = {};
-    for (let i = 0; i < batch.length; i++) allowedIds[normalizeId(batch[i].id)] = true;
+    for (let i = 0; i < batch.length; i++) allowedIds[normalizeId(batch[i].id)] = batch[i];
+    let okCount = 0;
+    let skipCount = 0;
     try {
-      const items = await aiTagBatch(batch);
-      let applied = 0;
+      const reply = await aiTagBatch(batch);
+      const items = reply.items;
+      if (!items.length) throw new Error('AI 返回 items 数组为空（finish_reason=' + (reply.finishReason || '未知') + '）');
+      const returned = {};
+      let malformed = 0;
       for (let i = 0; i < items.length; i++) {
-        if (applyAiTagItem(items[i], allowedIds, minConfidence)) applied += 1;
+        const itemId = normalizeId(items[i] && items[i].id);
+        if (!allowedIds[itemId]) { malformed += 1; continue; }
+        if (returned[itemId]) { malformed += 1; continue; }
+        returned[itemId] = true;
+        const result = applyAiTagItem(items[i], allowedIds, minConfidence, { force: force });
+        if (result.ok) {
+          okCount += 1;
+          recordAiResult(allowedIds[itemId], 'ok', '', songTags[itemId]);
+        } else {
+          skipCount += 1;
+          recordAiResult(allowedIds[itemId], 'skip', result.reason, null);
+        }
       }
-      stored += applied;
-      skipped += Math.max(0, batch.length - applied);
+      // AI 没返回的歌曲单独记原因，避免和置信度/枚举问题混在一起
+      for (let i = 0; i < batch.length; i++) {
+        const id = normalizeId(batch[i].id);
+        if (returned[id]) continue;
+        skipCount += 1;
+        recordAiResult(batch[i], 'skip', 'AI 未返回该歌曲', null);
+      }
+      stored += okCount;
+      skipped += skipCount;
       aiJob.error = '';
+      if (reply.finishReason && reply.finishReason !== 'stop') {
+        logWarn('AI 标签批次结束原因：' + reply.finishReason + '（第 ' + (aiJob.batches + 1) + ' 批）');
+      }
+      if (malformed) logWarn('AI 标签批次返回 ' + malformed + ' 条无效/重复 ID（第 ' + (aiJob.batches + 1) + ' 批）');
+      log('AI 标签批次完成（第 ' + (aiJob.batches + 1) + ' 批）：本批 ' + batch.length
+        + ' 首 · AI 返回 ' + items.length + ' 条 · 写入 ' + okCount + ' · 跳过 ' + skipCount);
     } catch (e) {
       failed += batch.length;
       aiJob.error = e.message;
-      logWarn('AI 标签批次失败（第 ' + (aiJob.batches + 1) + ' 批）：' + e.message);
+      for (let i = 0; i < batch.length; i++) {
+        recordAiResult(batch[i], 'fail', '批次失败：' + e.message, null);
+      }
+      const sample = batch.slice(0, 3).map(function (song) {
+        return String(song.title || song.id);
+      }).join('、');
+      logWarn('AI 标签批次失败（第 ' + (aiJob.batches + 1) + ' 批，' + batch.length
+        + ' 首）：' + e.message + (sample ? '；示例：' + sample : ''));
     }
     aiJob.batches += 1;
     aiJob.done = Math.min(targets.length, offset + batch.length);
     aiJob.stored = stored;
     aiJob.skipped = skipped;
     aiJob.failed = failed;
-    aiJob.message = '已处理 ' + aiJob.done + '/' + targets.length + ' 首';
+    aiJob.prefilled = prefilled;
+    aiJob.message = '已处理 ' + aiJob.done + '/' + targets.length + ' 首'
+      + '（写入 ' + stored + ' · 跳过 ' + skipped + ' · 失败 ' + failed + '）';
     await saveSongTags();
     await persistAiJob();
     await sleepMs(200);
@@ -1746,8 +1947,10 @@ async function runAiTagJob(options) {
   aiJob.stored = stored;
   aiJob.skipped = skipped;
   aiJob.failed = failed;
+  aiJob.prefilled = prefilled;
   aiJob.message = (aiStopRequested ? '已停止' : '完成')
-    + '：更新 ' + stored + ' 首，跳过 ' + skipped + ' 首，失败 ' + failed + ' 首';
+    + '：AI 更新 ' + stored + ' 首，跳过 ' + skipped + ' 首，失败 ' + failed + ' 首'
+    + (prefilled ? '；本地预填语种 ' + prefilled + ' 首' : '');
   if (aiStopRequested) aiJob.error = '';
   await saveSongTags();
   await persistAiJob();
@@ -2001,6 +2204,7 @@ router.post('/api/favorites/sync', async function () {
 router.get('/api/ai/status', async function () {
   const library = await getLibrary();
   const candidates = filterCandidates(library);
+  const pending = countPendingTags(library);
   return jsonResponse({
     ok: true,
     config: {
@@ -2018,7 +2222,14 @@ router.get('/api/ai/status', async function () {
       hasKey: Boolean(config.aiApiKey)
     },
     job: aiJobSnapshot(),
-    coverage: computeTagCoverage(candidates),
+    // 覆盖率按全库统计；candidateCoverage 仅作参考（推荐候选可能是网络子集）
+    coverage: computeTagCoverage(library),
+    candidateCoverage: computeTagCoverage(candidates),
+    libraryStats: computeLibraryStats(library),
+    pending: pending.pending,
+    lockedCount: pending.locked,
+    candidateCount: candidates.length,
+    scope: 'library',
     providers: AI_PROVIDERS,
     songTagCount: Object.keys(songTags).length
   });
@@ -2067,6 +2278,61 @@ router.get('/api/tag-dictionary', async function () {
 
 /* 单曲标签 */
 const TAG_DIM_TO_KEY = { genres: 'g', styles: 's', languages: 'l', decades: 'd' };
+
+/** 歌曲标签明细：支持搜索、覆盖率维度筛选、来源/状态/类型筛选与分页 */
+router.get('/api/song-tags/list', async function (req) {
+  const q = parseQuery(req.query);
+  const library = await getLibrary();
+  const keyword = String(q.q || '').trim().toLowerCase();
+  const dim = TAG_DIM_TO_KEY[String(q.dim || '')] ? String(q.dim) : '';
+  const status = String(q.status || '');
+  const source = String(q.source || '');
+  const type = String(q.type || '');
+  const rows = [];
+  for (let i = 0; i < library.length; i++) {
+    const song = library[i];
+    const row = songTagDetailRow(song);
+    if (type && row.type !== type) continue;
+    if (source && row.source !== source) continue;
+    if (dim && !row.tags[dim].length) continue;
+    if (status === 'any' && row.status === 'empty') continue;
+    if (status === 'full' && row.status !== 'full') continue;
+    if (status === 'partial' && row.status !== 'partial') continue;
+    if (status === 'empty' && row.status !== 'empty') continue;
+    if (status === 'pending' && !(row.missing.length && !row.locked)) continue;
+    if (status === 'locked' && !row.locked) continue;
+    if (keyword) {
+      const haystack = (row.title + ' ' + row.artist + ' ' + row.album + ' ' + row.id).toLowerCase();
+      if (haystack.indexOf(keyword) < 0) continue;
+    }
+    rows.push(row);
+  }
+  rows.sort(function (a, b) {
+    const diff = Number(b.updatedAt || 0) - Number(a.updatedAt || 0);
+    if (diff) return diff;
+    const left = String(a.title || a.id);
+    const right = String(b.title || b.id);
+    return left < right ? -1 : (left > right ? 1 : 0);
+  });
+  const pageSize = Math.round(clamp(Number(q.pageSize) || 20, 1, 200));
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.round(clamp(Number(q.page) || 1, 1, pages));
+  const start = (page - 1) * pageSize;
+  const pending = countPendingTags(library);
+  return jsonResponse({
+    ok: true,
+    total: rows.length,
+    page: page,
+    pageSize: pageSize,
+    pages: pages,
+    items: rows.slice(start, start + pageSize),
+    coverage: computeTagCoverage(library),
+    libraryStats: computeLibraryStats(library),
+    pending: pending.pending,
+    lockedCount: pending.locked,
+    songTagCount: Object.keys(songTags).length
+  });
+});
 
 router.get('/api/song-tags', async function (req) {
   const q = parseQuery(req.query);
@@ -2123,7 +2389,17 @@ router.post('/api/song-tags', async function (req) {
 router.get('/api/tags/coverage', async function () {
   const library = await getLibrary();
   const candidates = filterCandidates(library);
-  return jsonResponse({ ok: true, coverage: computeTagCoverage(candidates), songTagCount: Object.keys(songTags).length });
+  const pending = countPendingTags(library);
+  return jsonResponse({
+    ok: true,
+    coverage: computeTagCoverage(library),
+    candidateCoverage: computeTagCoverage(candidates),
+    libraryStats: computeLibraryStats(library),
+    pending: pending.pending,
+    lockedCount: pending.locked,
+    scope: 'library',
+    songTagCount: Object.keys(songTags).length
+  });
 });
 /* ─── 生命周期 ─── */
 let initialized = false;

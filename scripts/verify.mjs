@@ -164,10 +164,10 @@ r = await call('POST', '/api/profiles', {
 ok(r.status === 200 && r.data.ok, '更新画像：追加别名成功');
 
 /* ---------- 候选范围 ---------- */
-r = await call('GET', '/api/recommend', { query: 'profile=me&count=12' });
-ok(r.status === 200 && r.data.items.length === 12, '默认推荐返回 12 首');
-ok(r.data.meta.candidateCount === 12, '默认候选只含 12 首网络歌曲');
-ok(r.data.items.every(function (item) { return item.type === 'remote'; }), '默认候选全部 type=remote');
+r = await call('GET', '/api/recommend', { query: 'profile=me&count=16' });
+ok(r.status === 200 && r.data.items.length === 16, '默认推荐可返回全库 16 首');
+ok(r.data.meta.candidateCount === 16, '默认候选为全库 16 首（含本地）');
+ok(r.data.items.some(function (item) { return item.type === 'local'; }), '默认候选包含本地歌曲');
 
 /* ---------- 手动画像：正权重 ---------- */
 r = await call('POST', '/api/manual', {
@@ -186,10 +186,15 @@ r = await call('POST', '/api/manual', {
 });
 ok(r.status === 200 && r.data.ok, '保存「我」手动画像：邓丽君 -1');
 
-r = await call('GET', '/api/recommend', { query: 'profile=me&count=12' });
-const lastItem = r.data.items[r.data.items.length - 1];
-ok(lastItem.artist === '邓丽君', '负权重：目标歌手被压到末尾');
+r = await call('GET', '/api/recommend', { query: 'profile=me&count=16' });
+ok(r.data.items[r.data.items.length - 1].artist === '邓丽君', '负权重：目标歌手被压到末尾');
 ok(r.data.items[0].artist !== '邓丽君', '负权重：目标歌手不再排第一');
+
+/* ---------- 收藏开关（全库 16 首中的收藏加成分） ---------- */
+r = await call('GET', '/api/recommend', { query: 'profile=me&count=16' });
+const meFavoriteItem = r.data.items.filter(function (item) { return item.songId === 'r1'; })[0];
+ok(Boolean(meFavoriteItem), '收藏歌仍参与推荐');
+ok(meFavoriteItem.breakdown.favorite === 0, 'useFavorites=false：收藏歌不加分');
 
 /* ---------- 歌手标签 + 手动标签偏好 ---------- */
 r = await call('POST', '/api/singer-tags', { body: { singer: '某歌手A', tags: '民谣, 华语' } });
@@ -208,11 +213,6 @@ ok(r.data.items[0].artist === '某歌手A', '歌手标签命中：民谣歌手�
 ok(/手动画像/.test(r.data.items[0].reason), '标签命中进入推荐理由');
 
 /* ---------- 收藏开关 ---------- */
-r = await call('GET', '/api/recommend', { query: 'profile=me&count=12' });
-const meFavoriteItem = r.data.items.filter(function (item) { return item.songId === 'r1'; })[0];
-ok(Boolean(meFavoriteItem), '收藏歌仍参与推荐');
-ok(meFavoriteItem.breakdown.favorite === 0, 'useFavorites=false：收藏歌不加分');
-
 r = await call('GET', '/api/recommend', { query: 'profile=mom&count=12' });
 const momFavoriteItem = r.data.items.filter(function (item) { return item.songId === 'r1'; })[0];
 ok(Boolean(momFavoriteItem), '「老妈」推荐包含收藏歌');
@@ -229,15 +229,15 @@ ok(momTop !== sisterTop, '两个画像同一批歌的 top 结果不同');
 /* ---------- 推荐池 ---------- */
 r = await call('POST', '/api/pool', { body: { profile: 'me', action: 'refill', count: 20 } });
 ok(r.status === 200 && r.data.ok, '推荐池补充成功');
-ok(r.data.pool.length === 12, '推荐池装满全部 12 首候选');
+ok(r.data.pool.length === 16, '推荐池装满全部 16 首候选');
 
 r = await call('POST', '/api/pool', { body: { profile: 'me', action: 'checkout', count: 5 } });
 ok(r.status === 200 && r.data.entries.length === 5, '从推荐池取出 5 首');
-ok(r.data.remaining === 7, '取出后池内剩余 7 首');
+ok(r.data.remaining === 11, '取出后池内剩余 11 首');
 
 r = await call('POST', '/api/pool', { body: { profile: 'me', action: 'checkout', count: 8 } });
 ok(r.status === 200 && r.data.entries.length === 8, '池不足时自动补充后取出 8 首');
-ok(r.data.remaining === 4, '第二次取出后池内剩余 4 首');
+ok(r.data.remaining === 3, '第二次取出后池内剩余 3 首');
 
 r = await call('POST', '/api/pool', { body: { profile: 'me', action: 'clear' } });
 ok(r.status === 200 && r.data.size === 0, '清空推荐池');
@@ -249,14 +249,17 @@ r = await call('POST', '/api/pool', { body: { profile: 'me', action: 'checkout',
 ok(r.status === 200 && r.data.entries.length === 5, '回池后再取出 5 首（自动补充）');
 
 /* ---------- 候选来源切换 ---------- */
-r = await call('POST', '/api/config', { body: { config: { candidateSource: 'all', poolSize: 100 } } });
-ok(r.status === 200 && r.data.config.candidateSource === 'all', '切换到全部歌曲候选');
+r = await call('GET', '/api/recommend', { query: 'profile=me&count=12' });
+ok(r.data.meta.candidateCount === 16, '默认候选来源 all：候选数 16');
+
+r = await call('POST', '/api/config', { body: { config: { candidateSource: 'remote', poolSize: 100 } } });
+ok(r.status === 200 && r.data.config.candidateSource === 'remote', '切换到仅网络歌曲候选');
 
 r = await call('GET', '/api/recommend', { query: 'profile=me&count=12' });
-ok(r.data.meta.candidateCount === 16, '候选来源 all：候选数变为 16');
+ok(r.data.meta.candidateCount === 12, '候选来源 remote：候选数变为 12');
 
-r = await call('POST', '/api/config', { body: { config: { candidateSource: 'remote' } } });
-ok(r.data.config.candidateSource === 'remote', '切回网络歌曲候选');
+r = await call('POST', '/api/config', { body: { config: { candidateSource: 'all' } } });
+ok(r.status === 200 && r.data.config.candidateSource === 'all', '切回全部歌曲候选');
 ok(r.data.config.poolSize === 100, '配置默认池容量保留为 100');
 
 /* ---------- 别名声明的画像解析 ---------- */
@@ -266,7 +269,7 @@ ok(r.data.manual.artists['邓丽君'] === 1, '别名解析读到正确的手动�
 
 /* ---------- 状态与日志 ---------- */
 r = await call('GET', '/api/status');
-ok(r.status === 200 && r.data.version === '0.2.0', '/api/status：版本 0.2.0');
+ok(r.status === 200 && r.data.version === '0.2.1', '/api/status：版本 0.2.1');
 ok(r.data.profiles === 3, '/api/status：画像数量 3');
 ok(r.data.favorites.count === 2, '/api/status：收藏缓存 2 首');
 ok(r.data.singerTags === 2, '/api/status：歌手标签 2 个');
@@ -295,16 +298,33 @@ ok(r.status === 200 && r.data.count === 2, 'AI 模型列表：返回 2 个模型
 r = await call('POST', '/api/ai/test');
 ok(r.status === 200 && r.data.ok === true && r.data.kind === 'models', 'AI 连通性检测通过');
 
+/* 全库统计与待补全口径 */
+r = await call('GET', '/api/ai/status');
+ok(r.status === 200 && r.data.scope === 'library', 'AI 状态：覆盖率口径为全库');
+ok(r.data.libraryStats.total === 16, '曲库统计：全库 16 首');
+ok(r.data.libraryStats.local === 4 && r.data.libraryStats.remote === 12, '曲库统计：本地 4 / 网络 12');
+ok(r.data.libraryStats.withFilePath === 4, '曲库统计：4 首带 file_path');
+ok(r.data.pending === 16 && r.data.lockedCount === 0, 'AI 前待补全 16 首、锁定 0 首');
+ok(r.data.coverage.total === 16, '覆盖率分母为全库 16 首');
+
 r = await call('POST', '/api/ai/tag/run', { body: { force: true } });
 ok(r.status === 200 && r.data.started === true, 'AI 补全任务已启动');
 let job = await waitAiJob();
 ok(job.running === false, 'AI 补全任务已结束');
-ok(job.stored === 12, 'AI 补全：12 首写入标签');
+ok(job.stored === 16, 'AI 补全：全库 16 首写入标签');
+ok(job.prefilled === 16, 'AI 补全：本地语种预填 16 首');
+ok(job.batches === 2, 'AI 补全：批量 12 分 2 批');
+ok(Array.isArray(job.results) && job.results.length === 16, 'AI 补全：逐首结果 16 条');
+ok(job.results.every(function (row) { return row.status === 'ok'; }), 'AI 补全：逐首结果全部为写入');
+ok(job.results[0].tags && job.results[0].tags.genres.length === 1, 'AI 补全：逐首结果带四维标签');
 
 r = await call('GET', '/api/tags/coverage');
-ok(r.status === 200 && r.data.coverage.total === 12, '标签覆盖率：候选 12 首');
-ok(r.data.coverage.genres === 12 && r.data.coverage.styles === 12, '标签覆盖率：流派/风格各 12 首');
-ok(r.data.coverage.languages === 12 && r.data.coverage.decades === 12, '标签覆盖率：语种/年代各 12 首');
+ok(r.status === 200 && r.data.coverage.total === 16, '标签覆盖率：全库 16 首');
+ok(r.data.coverage.genres === 16 && r.data.coverage.styles === 16, '标签覆盖率：流派/风格各 16 首');
+ok(r.data.coverage.languages === 16 && r.data.coverage.decades === 16, '标签覆盖率：语种/年代各 16 首');
+
+r = await call('GET', '/api/ai/status');
+ok(r.data.pending === 0 && r.data.lockedCount === 0, 'AI 补全后：待补全 0 首');
 
 r = await call('GET', '/api/song-tags', { query: 'id=r1' });
 ok(r.status === 200 && r.data.entry && r.data.entry.src === 'ai', '歌曲标签：r1 来源为 AI');
@@ -321,12 +341,42 @@ ok(r.data.entry.locked === true, '手动歌曲标签：默认锁定');
 r = await call('GET', '/api/song-tags', { query: 'id=r1' });
 ok(r.data.effective.languages[0] === '粤语' && r.data.effective.decades[0] === '1980s', '歌曲级标签覆盖歌手级');
 
+r = await call('GET', '/api/ai/status');
+ok(r.data.pending === 0 && r.data.lockedCount === 1, '手动锁定后：待补全 0、锁定 1');
+
 /* 强制重跑不得覆盖锁定条目 */
 r = await call('POST', '/api/ai/tag/run', { body: { force: true } });
 ok(r.status === 200 && r.data.started === true, 'AI 重跑任务已启动');
 await waitAiJob();
 r = await call('GET', '/api/song-tags', { query: 'id=r1' });
 ok(r.data.entry.src === 'manual' && r.data.entry.l[0] === '粤语', 'AI 重跑：锁定的手动标签未被覆盖');
+
+/* 标签明细 API：全库 + 筛选 + 分页 */
+r = await call('GET', '/api/song-tags/list', { query: 'page=1&pageSize=20' });
+ok(r.status === 200 && r.data.total === 16 && r.data.items.length === 16, '标签明细：全库 16 首');
+ok(r.data.items.filter(function (row) { return row.locked; }).length === 1, '标签明细：锁定项 1 首');
+ok(r.data.items[0].tags && Array.isArray(r.data.items[0].tags.genres), '标签明细：包含四维标签');
+
+r = await call('GET', '/api/song-tags/list', { query: 'type=local' });
+ok(r.data.total === 4, '标签明细：本地歌曲 4 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'status=full' });
+ok(r.data.total === 16, '标签明细：四维完整 16 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'dim=genres' });
+ok(r.data.total === 16, '标签明细：有流派标签 16 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'status=locked' });
+ok(r.data.total === 1 && r.data.items[0].title === '甜蜜蜜', '标签明细：按锁定筛选 1 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'source=manual' });
+ok(r.data.total === 1, '标签明细：按来源手动筛选 1 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'q=' + encodeURIComponent('甜蜜蜜') });
+ok(r.data.total === 1 && r.data.items[0].title === '甜蜜蜜', '标签明细：关键词搜索命中 1 首');
+
+r = await call('GET', '/api/song-tags/list', { query: 'page=2&pageSize=5' });
+ok(r.data.page === 2 && r.data.pages === 4 && r.data.items.length === 5, '标签明细：分页第 2/4 页');
 
 r = await call('POST', '/api/song-tags', { body: { songId: 'r2', tags: {} } });
 ok(r.status === 400, '空标签被拒绝');
@@ -336,8 +386,13 @@ ok(r.status === 200 && r.data.deleted === 'r1', '删除歌曲标签成功');
 r = await call('GET', '/api/song-tags', { query: 'id=r1' });
 ok(r.data.entry === null, '删除后歌曲标签为空');
 
+r = await call('GET', '/api/song-tags/list', { query: 'status=empty' });
+ok(r.data.total === 1 && r.data.items[0].id === 'r1', '删除后：明细中 1 首未标注');
+r = await call('GET', '/api/ai/status');
+ok(r.data.pending === 1 && r.data.lockedCount === 0, '删除后：待补全 1 首');
+
 r = await call('GET', '/api/status');
-ok(r.data.songTags === 11, '状态：歌曲标签 11 首');
+ok(r.data.songTags === 15, '状态：歌曲标签 15 首');
 ok(r.data.ai && r.data.ai.enabled === true, '状态：AI 已启用');
 
 r = await call('GET', '/api/logs');
@@ -360,4 +415,4 @@ ok(r.status === 200 && r.data.ok, '删除画像「老妹」成功');
 r = await call('POST', '/api/profiles', { body: { action: 'delete', id: 'me' } });
 ok(r.status === 400 && /至少保留/.test(r.data.error), '最后一个画像不允许删除');
 
-console.log('\n全部 ' + pass + ' 项自测通过（personal-radio v0.2.0）');
+console.log('\n全部 ' + pass + ' 项自测通过（personal-radio v0.2.1）');

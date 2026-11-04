@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>个人电台</title>
   <base href="/">
-  <link rel="stylesheet" href="static/styles.css?v=0.2.0">
+  <link rel="stylesheet" href="static/styles.css?v=0.2.1">
 </head>
 <body>
   <div class="wrap">
     <header class="header">
-      <img class="icon" src="static/icon.svg?v=0.2.0" alt="">
+      <img class="icon" src="static/icon.svg?v=0.2.1" alt="">
       <div class="header-text">
         <h1>个人电台 <span class="ver" id="ver"></span></h1>
         <p class="sub">多人画像 · 行为自动演进 · 按兴趣选歌</p>
@@ -156,10 +156,61 @@
         <button class="btn danger" id="btn-stop-ai">停止</button>
       </div>
       <p class="tip small" id="ai-test-result"></p>
+      <p class="tip small" id="ai-library-stats">正在读取曲库统计…</p>
       <div class="coverage-grid" id="ai-coverage"></div>
+      <p class="tip small">覆盖率按全库统计；点击任一格子可在下方「歌曲标签明细」中筛选查看。</p>
       <div class="progress-bar"><span id="ai-progress-fill"></span></div>
       <p class="tip small" id="ai-job-text">尚未运行补全任务</p>
+      <details class="result-box" id="ai-result-box">
+        <summary>逐首结果 <span id="ai-result-meta"></span></summary>
+        <div class="result-list" id="ai-result-list"></div>
+      </details>
       <p class="tip small">检测连接会先调用 <code>/models</code>；若服务商不提供模型列表，会改用对话接口验证，仍可在「模型」里手工填写名称。</p>
+    </section>
+
+    <section class="card" id="tag-detail-card">
+      <div class="card-head">
+        <h2>歌曲标签明细</h2>
+        <span class="tip small" id="tag-detail-meta">全库 - 首</span>
+      </div>
+      <p class="tip small">标签存在插件存储 <code>personalRadio.songTags</code>（g=流派 s=风格 l=语种 d=年代），与宿主曲库字段分离；这里可逐首查看并纠正，人工保存默认锁定。</p>
+      <div class="filter-bar">
+        <input id="tag-filter-q" placeholder="搜索歌名 / 歌手 / 专辑 / ID">
+        <select id="tag-filter-status" class="compact">
+          <option value="">全部状态</option>
+          <option value="any">任一标签</option>
+          <option value="full">四维完整</option>
+          <option value="partial">部分缺失</option>
+          <option value="empty">未标注</option>
+          <option value="pending">待补全</option>
+          <option value="locked">已锁定</option>
+        </select>
+        <select id="tag-filter-source" class="compact">
+          <option value="">全部来源</option>
+          <option value="ai">AI</option>
+          <option value="manual">手动</option>
+          <option value="auto">本地预填</option>
+        </select>
+        <select id="tag-filter-type" class="compact">
+          <option value="">全部类型</option>
+          <option value="local">本地</option>
+          <option value="remote">网络</option>
+          <option value="radio">电台</option>
+        </select>
+        <select id="tag-filter-size" class="compact">
+          <option value="20">20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+        <button class="btn ghost small" id="btn-tag-filter-reset">重置筛选</button>
+      </div>
+      <p class="tip small" id="tag-filter-tip"></p>
+      <div class="tag-detail-list" id="tag-detail-list"><p class="tip small">正在加载…</p></div>
+      <div class="pager">
+        <button class="btn ghost small" id="tag-page-prev">上一页</button>
+        <span class="tip small" id="tag-page-text">- / -</span>
+        <button class="btn ghost small" id="tag-page-next">下一页</button>
+      </div>
     </section>
 
     <section class="card">
@@ -235,6 +286,6 @@
     </div>
   </div>
   <div class="toast" id="toast"></div>
-  <script src="static/app.js?v=0.2.0"></script>
+  <script src="static/app.js?v=0.2.1"></script>
 </body>
 </html>

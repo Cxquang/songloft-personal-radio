@@ -1,6 +1,6 @@
 {
   "name": "songloft-personal-radio",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "个人电台插件 for Songloft",

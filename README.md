@@ -2,7 +2,7 @@
 
 Songloft 插件：按**多人画像**自动演进的个性化电台推荐引擎。给家人各建一份画像，说「播放老妈喜欢的」就自动从曲库挑她那一套，听得越多越准。
 
-> ⚠️ **P1 + v0.2.0（AI 标签补全）已完成，自测 89 项全绿；P2 语音桥接 + P3 行为回流待接入。** 详见「后续阶段」与仓库内 `ROADMAP.md`。
+> ⚠️ **P1 + v0.2.1（AI 标签补全 + 可观测性增强）已完成，自测 115 项全绿；P2 语音桥接 + P3 行为回流待接入。** 详见下文「后续阶段」。
 
 ## 功能
 
@@ -24,7 +24,7 @@ Songloft 插件：按**多人画像**自动演进的个性化电台推荐引擎�
 - **手动画像**：歌手 ±1.0 权重（永久压制或永久推升）+ 歌手标签偏好
 - **收藏同步**：自动识别收藏歌单、缓存歌单 ids；每画像可独立选择是否纳入收藏歌（整体开关，不做逐首归属）
 - **页面**：画像 Tabs、今日推荐（含 score 明细 + reason）、画像编辑、手动画像、歌手标签库、引擎设置、运行日志
-- **自测**：`node scripts/verify.mjs` 基础项全绿（v0.2.0 起共 89 项）
+- **自测**：`node scripts/verify.mjs` 基础项全绿（v0.2.1 起共 115 项）
 
 ### v0.2.0（AI 标签补全）
 
@@ -37,6 +37,15 @@ Songloft 插件：按**多人画像**自动演进的个性化电台推荐引擎�
 - **准确度约束**：提示词锁定标签枚举 + 无法判断填 null + 置信度阈值 + 只接受枚举内值 + 锁定项跳过 + 语种本地判定
 - **页面上限管理**：AI 设置卡（检测连接与获取模型、开始/停止补全、进度与覆盖率）、标签云（点选默认 +0.6、可编辑权重）、推荐列表每首歌的「标签」弹层（四组 chips 手动改标）
 - **自测**：89 项，含 mock AI `/models` 与 `/chat/completions` 全流程
+
+### v0.2.1（可观测性增强）
+
+- **覆盖率按全库统计**：显示全库/本地/网络/待补全/已锁定/宿主自带流派与年份；六个覆盖率格子可点击，直接筛选下方明细
+- **歌曲标签明细表**：按关键词、维度（有流派/风格/语种/年代）、状态（完整/部分缺失/未标注/待补全/锁定）、来源（AI/手动/本地预填）、类型（本地/网络/电台）筛选并分页；每行展示四维标签与缺失维度，可直接编辑
+- **AI 逐首结果**：每次任务记录每首歌的写入/跳过/失败原因（上限 300 条），日志增加批次级写入/跳过统计
+- **默认候选改为全部歌曲（含本地）**：旧配置自动一次性迁移；`candidateSource` 仍可切回 `remote`
+- **自测**：115 项，新增全库统计、待补全口径、标签明细筛选/分页、逐首结果断言
+
 ### 后续阶段
 
 - **P2（待开工）**：`/public/hook` 免 JWT 端点 + miot 对话 Webhook 接入，口令别名最长匹配（「播放老妈喜欢的」→ mom 画像），自动建歌单「{画像名}-推荐」，调 miot `POST /player/play` 出声
@@ -121,17 +130,17 @@ https://raw.githubusercontent.com/Cxquang/songloft-personal-radio/main/registry.
 
 从 [GitHub Releases](../../releases) 下载 `personal-radio-v{version}.jsplugin.zip`，Songloft Web → 插件管理 → 上传该 zip。
 
-直链（v0.2.0）：
+直链（v0.2.1）：
 ```
-https://github.com/Cxquang/songloft-personal-radio/releases/download/v0.2.0/personal-radio-v0.2.0.jsplugin.zip
+https://github.com/Cxquang/songloft-personal-radio/releases/download/v0.2.1/personal-radio-v0.2.1.jsplugin.zip
 ```
 
 ### 方式三：源码构建
 
 ```bash
 npm install          # 零依赖（纯 Node builtin），可跳过
-npm run build        # 产物 Release/personal-radio-v0.2.0.jsplugin.zip
-npm run verify       # 自测 89 项
+npm run build        # 产物 Release/personal-radio-v0.2.1.jsplugin.zip
+npm run verify       # 自测 115 项
 ```
 
 ## 配置
@@ -140,7 +149,7 @@ npm run verify       # 自测 89 项
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| 候选来源 | remote | `remote` 只网络歌曲；`all` 含本地歌 |
+| 候选来源 | all | `all` 含本地歌；`remote` 只网络歌曲 |
 | 池容量 | 100 | 推荐池预筛候选数 |
 | 批量 | 20 | 每次取批大小 |
 | 探索比例 | 自动（15–35%） | 手动设值覆盖自动逻辑 |
@@ -170,10 +179,10 @@ AI 标签补全配置（v0.2.0）：\n\n| 配置项 | 默认 | 说明 |\n|---|--
 npm run verify
 ```
 
-mock 12 首 remote + 4 首 local，收藏 2 首，覆盖：
+mock 16 首（12 首 remote + 4 首 local），收藏 2 首，覆盖：
 
 - 画像 CRUD + 别名唯一 + 默认画像 + 最后一个画像禁止删除
-- 候选筛选 `type=remote`
+- 候选来源 `all`（16 首，含本地）/ `remote`（12 首）切换
 - 手动正权重提升目标歌手 / 负权重压制
 - `useFavorites` 开关：false 时收藏分 0，true 时 +12
 - 歌手标签映射 → 排序改变
@@ -181,7 +190,7 @@ mock 12 首 remote + 4 首 local，收藏 2 首，覆盖：
 - 池：refill → checkout → 自动补 → 回池 → 再取
 - API 边界：404 / 400
 
-v0.2.0 起共 89 项通过，新增覆盖：标签字典、AI 配置与请求头校验、模型列表、连通性检测、补全任务轮询、覆盖率、单曲标签读写/锁定/删除、AI 重跑不覆盖锁定项。
+v0.2.1 起共 115 项通过，新增覆盖：全库统计与待补全口径、标签明细筛选/分页、AI 逐首结果；原有覆盖：标签字典、AI 配置与请求头校验、模型列表、连通性检测、补全任务轮询、覆盖率、单曲标签读写/锁定/删除、AI 重跑不覆盖锁定项。
 
 ## 依赖
 
